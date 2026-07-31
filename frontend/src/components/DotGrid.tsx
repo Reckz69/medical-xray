@@ -211,7 +211,9 @@ const DotGrid: React.FC<DotGridProps> = ({
       pr.lastTime = now; pr.lastX = e.clientX; pr.lastY = e.clientY;
       pr.vx = vx; pr.vy = vy; pr.speed = speed;
 
-      const rect = canvasRef.current!.getBoundingClientRect();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
       pr.x = e.clientX - rect.left;
       pr.y = e.clientY - rect.top;
 
@@ -238,7 +240,9 @@ const DotGrid: React.FC<DotGridProps> = ({
     };
 
     const onClick = (e: MouseEvent) => {
-      const rect = canvasRef.current!.getBoundingClientRect();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
       const cx   = e.clientX - rect.left;
       const cy   = e.clientY - rect.top;
 

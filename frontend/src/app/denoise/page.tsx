@@ -300,7 +300,7 @@ function RoutingBanner({ result }: { result: DenoiseResponse }) {
           {result.routing_message}
         </p>
         <p className="text-xs mt-0.5 text-[oklch(0.55_0.04_280)]">
-          Measured flat-tissue noise variance: <strong>{result.noise_variance.toFixed(2)}</strong>
+          Measured flat-tissue noise variance: <strong>{(result.noise_variance ?? 0).toFixed(2)}</strong>
           {" · "}Image: {result.width} × {result.height} px
         </p>
       </div>
@@ -502,9 +502,9 @@ export default function DenoisePage() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {[
                       { label: "Routing",       value: result.was_bypassed ? "Bypassed" : "Processed" },
-                      { label: "Noise Var.",     value: result.noise_variance.toFixed(2) },
+                      { label: "Noise Var.",     value: (result.noise_variance ?? 0).toFixed(2) },
                       { label: "Enhancement",    value: "CLAHE+USM" },
-                      { label: "Time",           value: `${result.processing_time_ms.toFixed(0)} ms` },
+                      { label: "Time",           value: `${(result.processing_time_ms ?? 0).toFixed(0)} ms` },
                     ].map((s) => (
                       <div key={s.label} className="stat-card !py-3 !px-3 flex flex-col items-center justify-center text-center">
                         <div className="font-bold text-gradient text-sm md:text-base leading-tight">{s.value}</div>

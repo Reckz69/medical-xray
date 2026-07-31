@@ -1,0 +1,551 @@
+openapi: 3.1.0
+info:
+  title: Denoise X API
+  description: |
+    Clinical-grade AI X-ray enhancement platform.
+    All `/api/v1/*` endpoints return the standard envelope `{ success, data, meta, trace_id }`.
+    Errors return `{ code, message, trace_id, status }` with a stable machine-readable
+    `code` — the frontend switches on `code`, never on HTTP status text.
+  version: 1.0.0
+  contact:
+    name: Denoise X
+servers:
+  - url: http://localhost:8000
+    description: Local development (gateway)
+
+tags:
+  - name: System
+    description: Liveness / readiness probes (Kubernetes semantics)
+  - name: Auth
+    description: Registration, login, token refresh, logout
+  - name: Scans
+    description: Upload, history, status, presigned download, soft delete
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Components
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+      description: httpOnly, Secure, SameSite=Lax cookie set on login/refresh
+
+  schemas:
+    TraceId:
+      type: string
+      description: W3C trace id correlating this request across API, RabbitMQ, worker, S3 and DB.
+
+    Envelope:
+      type: object
+      required: [success, trace_id]
+      properties:
+        success:
+          type: boolean
+        data:
+          description: Payload. Absent on errors.
+        meta:
+          type: object
+          description: Pagination / request metadata.
+        trace_id:
+          $ref: "#/components/schemas/TraceId"
+      example:
+        success: true
+        data: {}
+        meta: {}
+        trace_id: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    ErrorBody:
+      type: object
+      required: [code, message, trace_id, status]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code (see ErrorCode enum).
+        message:
+          type: string
+        trace_id:
+          $ref: "#/components/schemas/TraceId"
+        status:
+          type: integer
+          description: HTTP status for convenience.
+      example:
+        code: SCAN_TOO_LARGE
+        message: Maximum upload size is 50 MB.
+        trace_id: 4bf92f3577b34da6a3ce929d0e0e4736
+        status: 413
+
+    ErrorCode:
+      type: string
+      enum:
+        - UNAUTHORIZED
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - NOT_FOUND
+        - CONFLICT
+        - VALIDATION_ERROR
+        - UNSUPPORTED_FORMAT
+        - SCAN_TOO_LARGE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+
+    User:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        role:
+          type: string
+          enum: [patient, radiologist, admin]
+        organization_id: { type: string, format: uuid }
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        organization_name:
+          type: string
+          description: Optional. If omitted, an org is created from the user's name.
+          maxLength: 120
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    TokenPair:
+      type: object
+      required: [access_token, token_type, expires_in, user]
+      properties:
+        access_token: { type: string, description: JWT, 15-minute TTL. }
+        token_type: { type: string, const: bearer }
+        expires_in: { type: integer, description: Seconds. }
+        user:
+          $ref: "#/components/schemas/User"
+
+    ScanStatus:
+      type: string
+      enum: [QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED]
+
+    OutputType:
+      type: string
+      enum: [ORIGINAL, NOISE_MAP, UNET, ENHANCED]
+
+    ScanSummary:
+      type: object
+      required: [id, status, original_name, format, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ScanStatus" }
+        original_name: { type: string }
+        format:
+          type: string
+          enum: [PNG, JPEG, DICOM]
+        size_bytes: { type: integer }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        noise_variance: { type: number, nullable: true }
+        routing_message: { type: string, nullable: true }
+        was_bypassed: { type: boolean, nullable: true }
+        processing_time_ms: { type: number, nullable: true }
+        model:
+          type: string
+          nullable: true
+          description: "model_name@model_version, e.g. n2n_unet@v1.0.0"
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+
+    ScanDetail:
+      allOf:
+        - $ref: "#/components/schemas/ScanSummary"
+        - type: object
+          properties:
+            outputs:
+              type: array
+              description: Present once COMPLETED.
+              items:
+                type: object
+                properties:
+                  type: { $ref: "#/components/schemas/OutputType" }
+                  size_bytes: { type: integer }
+                  mime_type: { type: string }
+
+    PresignedUrl:
+      type: object
+      required: [url, method, expires_in]
+      properties:
+        url: { type: string, description: Short-lived, object-scoped presigned URL. }
+        method: { type: string, const: GET }
+        expires_in: { type: integer, description: Seconds, example: 900 }
+
+    PageMeta:
+      type: object
+      required: [page, limit, total]
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+
+  responses:
+    Error:
+      description: Standard error envelope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    RateLimited:
+      description: RATE_LIMITED — Retry-After header provided.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+  /health/live:
+    get:
+      tags: [System]
+      operationId: healthLive
+      summary: Liveness — process is up. Does not check dependencies.
+      responses:
+        "200":
+          description: Process alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /health/ready:
+    get:
+      tags: [System]
+      operationId: healthReady
+      summary: Readiness — checks DB, Redis, RabbitMQ, storage and model.
+      responses:
+        "200":
+          description: All dependencies reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ready }
+                  checks:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        ok: { type: boolean }
+                        latency_ms: { type: number }
+        "503":
+          description: One or more dependencies unavailable.
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create a user + organization. Respects ENABLE_SIGNUP flag. Rate limit 3/day/IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Created. Returns token pair + user.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TokenPair" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Email already registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Authenticate. Sets refresh_token httpOnly cookie. Rate limit 5/min/IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Success. refresh_token set as a cookie.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TokenPair" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refresh
+      summary: Rotate the refresh token and issue a new access token.
+      security:
+        - refreshCookie: []
+      responses:
+        "200":
+          description: New access token; refresh cookie rotated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TokenPair" }
+        "401":
+          description: TOKEN_EXPIRED — client must clear session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the token family (bump refresh_token_version) and blacklist jti.
+      security:
+        - refreshCookie: []
+      responses:
+        "204": { description: No content. Cookie cleared. }
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      operationId: me
+      summary: Current authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Auth]
+      operationId: forgotPassword
+      summary: Placeholder — returns 200 to avoid email enumeration. Notifications deferred.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202": { description: Accepted (always, regardless of whether the email exists). }
+
+  /api/v1/scans:
+    post:
+      tags: [Scans]
+      operationId: createScan
+      summary: Upload an X-ray (PNG/JPEG/DICOM) and enqueue async denoising.
+      description: |
+        Validates magic bytes, decode, dimensions and 50MB cap, uploads the original
+        to object storage, records scan+job rows and publishes `commands.inference.run`.
+        Returns 202 with scan_id; poll `GET /api/v1/scans/{scan_id}` for status.
+        Rate limit 20/hour/user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "202":
+          description: Accepted for async processing.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [scan_id, status]
+                        properties:
+                          scan_id: { type: string, format: uuid }
+                          status: { $ref: "#/components/schemas/ScanStatus" }
+        "401": { $ref: "#/components/responses/Error" }
+        "413":
+          description: SCAN_TOO_LARGE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "415":
+          description: UNSUPPORTED_FORMAT.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+    get:
+      tags: [Scans]
+      operationId: listScans
+      summary: Paginated scan history for the current user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1, minimum: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ScanStatus" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ScanSummary" }
+                      meta: { $ref: "#/components/schemas/PageMeta" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/scans/{scan_id}:
+    get:
+      tags: [Scans]
+      operationId: getScan
+      summary: Scan status + result metadata (Redis-cached, PG fallback).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ScanDetail" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+    delete:
+      tags: [Scans]
+      operationId: deleteScan
+      summary: Soft delete a scan (sets deleted_at/deleted_by; in-flight job CANCELLED).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Soft-deleted. }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /api/v1/scans/{scan_id}/output/{output_type}/url:
+    get:
+      tags: [Scans]
+      operationId: getOutputUrl
+      summary: Presigned URL for one output image (audited as DOWNLOAD).
+      description: |
+        Verifies ownership, records an audit_logs DOWNLOAD entry (ip, user_agent,
+        trace_id), and returns a 15-minute presigned URL. The browser downloads
+        directly from object storage — image bytes never traverse the gateway.
+        Rate limit 300/hour/user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: output_type
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/OutputType" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PresignedUrl" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "410":
+          description: Scan deleted or output archived.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "429": { $ref: "#/components/responses/RateLimited" }
