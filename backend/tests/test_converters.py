@@ -138,7 +138,7 @@ def test_format_matches_legacy_loader_on_real_images() -> None:
 
     import inference_engine as legacy
 
-    root = pathlib.Path(__file__).resolve().parents[2] / ".."
+    root = pathlib.Path(__file__).resolve().parents[2]
     fixtures = [
         ("Images/dataset_x-ray1.png", "scan.png"),
         ("Images/high_noise_dicom.dicom", "scan.dcm"),

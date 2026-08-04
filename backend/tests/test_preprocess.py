@@ -46,7 +46,7 @@ def test_noise_detection_matches_legacy_oracle() -> None:
 def test_noise_detection_matches_legacy_on_real_images() -> None:
     import inference_engine as legacy
 
-    root = pathlib.Path(__file__).resolve().parents[2] / ".."
+    root = pathlib.Path(__file__).resolve().parents[2]
     for rel, name in [
         ("Images/dataset_x-ray1.png", "scan.png"),
         ("Images/high_noise_dicom.dicom", "scan.dcm"),

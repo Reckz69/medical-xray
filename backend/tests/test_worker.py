@@ -1,9 +1,11 @@
-"""Worker integration tests (Sprint 2B async processing).
+"""Worker integration tests (Sprint 3.6 async processing).
 
 Covers the full loop: upload -> gateway publishes `inference.run` to the
 commands exchange -> worker consumes and executes -> `scan.completed` event
-published -> job/scan COMPLETED, ENHANCED scan_output + Object rows persisted,
-output object in MinIO. Also covers the FAILED path (pipeline raises).
+published -> job/scan COMPLETED, four scan_output rows (ORIGINAL / NOISE_MAP /
+UNET / ENHANCED), a model_versions row, scan.model_id/noise_variance/
+processing_time_ms persisted, output objects in MinIO. Also covers the FAILED
+path (orchestrator raises).
 
 These tests hit the real RabbitMQ/Postgres/MinIO infra, so no worker process
 may be running concurrently while they execute.
@@ -36,14 +38,20 @@ from gateway.core.queue import (
     EVT_SCAN_FAILED,
 )
 from gateway.core.storage.factory import storage
-from gateway.models.scan import OUTPUT_TYPE_ENHANCED
+from gateway.models.scan import (
+    OUTPUT_TYPE_ENHANCED,
+    OUTPUT_TYPE_NOISE_MAP,
+    OUTPUT_TYPE_ORIGINAL,
+    OUTPUT_TYPE_UNET,
+)
 from gateway.repositories.job_repository import JobRepository
+from gateway.repositories.model_repository import ModelVersionRepository
 from gateway.repositories.object_repository import (
     ObjectRepository,
     ScanOutputRepository,
 )
 from gateway.repositories.scan_repository import ScanRepository
-from worker import pipeline
+from worker import orchestrator
 from worker.consumer import handle_inference_run
 
 _PASSWORD = "S3cure!Pass"
@@ -169,7 +177,7 @@ async def test_upload_runs_worker_to_completed(
     assert event["job_id"] == job_id
     assert event["status"] == "COMPLETED"
 
-    # 4. DB: job + scan COMPLETED, ENHANCED scan_output + Object rows exist
+    # 4. DB: job + scan COMPLETED with full pipeline metadata
     async with SessionLocal() as session:
         job = await JobRepository(session).get_by_id(uuid.UUID(job_id))
         assert job is not None
@@ -183,19 +191,51 @@ async def test_upload_runs_worker_to_completed(
         assert scan.status == "COMPLETED"
         assert scan.completed_at is not None
         assert scan.processing_time_ms is not None
+        assert scan.noise_variance is not None
+        assert scan.routing_message and "PATH" in scan.routing_message
+        assert scan.was_bypassed == ("PATH B" in scan.routing_message)
 
-        output = await ScanOutputRepository(session).get_for_scan(
-            uuid.UUID(scan_id), OUTPUT_TYPE_ENHANCED
+        model_version = await ModelVersionRepository(session).get_by_id(scan.model_id)
+        assert model_version is not None
+        assert model_version.model_name == settings.model_name
+        assert model_version.model_version == settings.model_version
+
+        # 5. All four scan_output rows exist, each with its own object
+        outputs = {
+            out_type: await ScanOutputRepository(session).get_for_scan(
+                uuid.UUID(scan_id), out_type
+            )
+            for out_type in (
+                OUTPUT_TYPE_ORIGINAL,
+                OUTPUT_TYPE_NOISE_MAP,
+                OUTPUT_TYPE_UNET,
+                OUTPUT_TYPE_ENHANCED,
+            )
+        }
+        for out_type, output in outputs.items():
+            assert output is not None, f"missing scan_output {out_type}"
+            obj = await ObjectRepository(session).get_by_id(output.object_id)
+            assert obj is not None, f"missing object for {out_type}"
+
+        # 6. ORIGINAL links the uploaded object (identity, same checksum)
+        original_object = await ObjectRepository(session).get_by_id(
+            outputs[OUTPUT_TYPE_ORIGINAL].object_id
         )
-        assert output is not None
-        output_object = await ObjectRepository(session).get_by_id(output.object_id)
-        assert output_object is not None
-        assert output_object.object_key != cmd["object_key"]
+        assert original_object.object_key == cmd["object_key"]
+        assert original_object.checksum == hashlib.sha256(content).hexdigest()
 
-        # 5. Output object in MinIO, identity pipeline -> same checksum
-        stored_bytes = await storage.download(output_object.object_key)
-        assert output_object.checksum == hashlib.sha256(content).hexdigest()
-        assert hashlib.sha256(stored_bytes).hexdigest() == output_object.checksum
+        # 7. Derived outputs in MinIO, checksums match stored bytes
+        for out_type in (
+            OUTPUT_TYPE_NOISE_MAP,
+            OUTPUT_TYPE_UNET,
+            OUTPUT_TYPE_ENHANCED,
+        ):
+            output_object = await ObjectRepository(session).get_by_id(
+                outputs[out_type].object_id
+            )
+            assert output_object.object_key != cmd["object_key"]
+            stored_bytes = await storage.download(output_object.object_key)
+            assert hashlib.sha256(stored_bytes).hexdigest() == output_object.checksum
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -208,10 +248,17 @@ async def test_worker_failure_marks_job_and_scan_failed(
     failed_events_reader: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _boom(data: bytes, *, fmt: str) -> bytes:
+    async def _boom(
+        data: bytes,
+        *,
+        fmt: str,
+        model_manager: Any,
+        original_name: str = "",
+        **kwargs: Any,
+    ) -> bytes:
         raise RuntimeError("model exploded")
 
-    monkeypatch.setattr(pipeline, "run", _boom)
+    monkeypatch.setattr(orchestrator, "run", _boom)
 
     email = f"worker_fail_{uuid.uuid4().hex[:8]}@example.com"
     token = (await _register(client, email))["token"]

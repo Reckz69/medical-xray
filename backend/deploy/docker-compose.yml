@@ -85,6 +85,10 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: ${MINIO_BUCKET:-denoise-xray}
+      # The gitignored weights are mounted at /weights (see volumes).
+      MODEL_PATH: /weights/n2n_unet_best_weights04 (2).keras
+    volumes:
+      - ${MODEL_WEIGHTS_PATH:-../n2n_unet_best_weights04 (2).keras}:/weights/n2n_unet_best_weights04 (2).keras:ro
     depends_on:
       - postgres
       - rabbitmq

@@ -22,8 +22,11 @@ file.
 - (stage 3.5) `worker/postprocess.py` — CLAHE + unsharp masking + PNG encode;
   golden tests (scikit-image, PSNR>35 AND SSIM>0.95).
 - (stage 3.6) `worker/orchestrator.py` — full pipeline coordinator producing
-  ORIGINAL/NOISE_MAP/UNET/ENHANCED, `scan.model_id`, `noise_variance`,
-  `processing_time_ms`; compose weights mount.
+  ORIGINAL/NOISE_MAP/UNET/ENHANCED + routing + per-stage timings; executor
+  rewritten to call it and persist `model_versions` / `scan.model_id` /
+  `noise_variance` / `processing_time_ms` / `routing_message` /
+  `was_bypassed`; `worker/main.py` starts `ModelManager` at boot; weights
+  volume-mounted in compose; `worker/pipeline.py` removed.
 
 **Changed**
 - `backend/inference_engine.py`, `backend/main.py`, `backend/test_api.py`

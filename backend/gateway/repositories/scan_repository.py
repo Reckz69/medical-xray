@@ -113,6 +113,8 @@ class ScanRepository(BaseRepository):
         model_id: UUID | None,
         noise_variance: float | None,
         processing_time_ms: float | None,
+        routing_message: str | None = None,
+        was_bypassed: bool | None = None,
         status: str,
     ) -> Scan | None:
         scan = await self.session.get(Scan, scan_id)
@@ -121,6 +123,10 @@ class ScanRepository(BaseRepository):
         scan.model_id = model_id
         scan.noise_variance = noise_variance
         scan.processing_time_ms = processing_time_ms
+        if routing_message is not None:
+            scan.routing_message = routing_message
+        if was_bypassed is not None:
+            scan.was_bypassed = was_bypassed
         scan.status = status
         scan.completed_at = datetime.now(UTC)
         await self.session.flush()

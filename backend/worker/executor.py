@@ -2,13 +2,15 @@
 
 `process_message` runs one `inference.run` command end-to-end:
 
-    claim job (QUEUED -> RUNNING) -> download original -> pipeline.run ->
-    upload output -> Object + ScanOutput rows -> scan COMPLETED ->
+    claim job (QUEUED -> RUNNING) -> download original -> orchestrator.run ->
+    upload 4 outputs -> Object + ScanOutput rows -> model_versions row ->
+    scan COMPLETED (model_id, noise_variance, processing_time_ms) ->
     job COMPLETED -> publish scan.completed
 
-On any failure the job and scan are marked FAILED and a `scan.failed` event is
-published. The executor is idempotent: a message for an already-terminal job is
-a no-op.
+The orchestrator is the real ML pipeline (ADR-008); this module stays
+persistence/transport-only. On any failure the job and scan are marked FAILED
+and a `scan.failed` event is published. The executor is idempotent: a message
+for an already-terminal job is a no-op.
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ import hashlib
 import logging
 import os
 import socket
-import time
 import uuid
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
@@ -32,10 +33,10 @@ from gateway.models.job import (
     JOB_STATUS_FAILED,
 )
 from gateway.models.scan import (
-    FORMAT_DICOM,
-    FORMAT_JPEG,
-    FORMAT_PNG,
     OUTPUT_TYPE_ENHANCED,
+    OUTPUT_TYPE_NOISE_MAP,
+    OUTPUT_TYPE_ORIGINAL,
+    OUTPUT_TYPE_UNET,
     SCAN_STATUS_COMPLETED,
 )
 from gateway.repositories.job_repository import JobRepository
@@ -44,7 +45,8 @@ from gateway.repositories.object_repository import (
     ScanOutputRepository,
 )
 from gateway.repositories.scan_repository import ScanRepository
-from worker import pipeline
+from worker import orchestrator
+from worker.model_manager import ModelManager
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,13 +55,13 @@ logger = logging.getLogger("denoise.worker")
 
 _WORKER_ID = f"{socket.gethostname()}-{os.getpid()}"
 
-_MIME_BY_FORMAT = {
-    FORMAT_PNG: "image/png",
-    FORMAT_JPEG: "image/jpeg",
-    FORMAT_DICOM: "application/dicom",
-}
+_MIME_PNG = "image/png"
 
 _TERMINAL_JOB_STATUSES = (JOB_STATUS_COMPLETED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED)
+
+# The one ModelManager owned by the worker process (ADR-006). Started by
+# worker.main at boot; reused for every job.
+model_manager = ModelManager()
 
 
 def _safe_name(filename: str) -> str:
@@ -123,45 +125,74 @@ async def _run_job(session: AsyncSession, payload: dict[str, Any]) -> bool:
     await scan_repo.set_running(scan_id)
     await session.flush()
 
-    started = time.perf_counter()
     original = await storage.download(payload["object_key"])
-    output = await pipeline.run(original, fmt=fmt)
-    processing_ms = (time.perf_counter() - started) * 1000
 
-    checksum = hashlib.sha256(output).hexdigest()
-    output_key = (
-        f"outputs/{scan_id}/{uuid.uuid4().hex}/{_safe_name(payload['original_name'])}"
+    result = await orchestrator.run(
+        original,
+        fmt=fmt,
+        model_manager=model_manager,
+        original_name=payload["original_name"],
     )
-    stored = await storage.upload(
-        output_key,
-        output,
-        content_type=_MIME_BY_FORMAT.get(fmt, "application/octet-stream"),
-        checksum=checksum,
+    logger.info(
+        "scan %s timings: %s",
+        scan_id,
+        {k: round(v, 1) for k, v in result.timings.as_dict().items()},
     )
 
     object_repo = ObjectRepository(session)
-    output_object = await object_repo.create(
-        bucket=stored.bucket,
-        object_key=stored.object_key,
-        size_bytes=stored.size_bytes,
-        mime_type=stored.mime_type,
-        checksum=checksum,
-        etag=stored.etag,
+    output_repo = ScanOutputRepository(session)
+
+    # ORIGINAL -> link the uploaded object (fills the pre-3.6 gap)
+    original_obj = await object_repo.get_by_key(payload["object_key"])
+    if original_obj is None:
+        raise RuntimeError(f"original object not found for key {payload['object_key']}")
+    await output_repo.add(
+        scan_id=scan_id, type=OUTPUT_TYPE_ORIGINAL, object_id=original_obj.id
     )
-    await ScanOutputRepository(session).add(
-        scan_id=scan_id, type=OUTPUT_TYPE_ENHANCED, object_id=output_object.id
-    )
+
+    # NOISE_MAP / UNET / ENHANCED -> upload PNG bytes as new objects
+    for output_type, png in (
+        (OUTPUT_TYPE_NOISE_MAP, result.noise_map_png),
+        (OUTPUT_TYPE_UNET, result.unet_png),
+        (OUTPUT_TYPE_ENHANCED, result.enhanced_png),
+    ):
+        checksum = hashlib.sha256(png).hexdigest()
+        output_key = f"outputs/{scan_id}/{uuid.uuid4().hex}/{output_type.lower()}.png"
+        stored = await storage.upload(
+            output_key, png, content_type=_MIME_PNG, checksum=checksum
+        )
+        output_object = await object_repo.create(
+            bucket=stored.bucket,
+            object_key=stored.object_key,
+            size_bytes=stored.size_bytes,
+            mime_type=stored.mime_type,
+            checksum=checksum,
+            etag=stored.etag,
+        )
+        await output_repo.add(
+            scan_id=scan_id, type=output_type, object_id=output_object.id
+        )
+
+    # Persist model_versions (create or reuse) and link the scan to it
+    await model_manager.persist_version(session)
+
     await scan_repo.set_completed(
         scan_id,
-        model_id=None,
-        noise_variance=None,
-        processing_time_ms=processing_ms,
+        model_id=model_manager.model_id,
+        noise_variance=result.noise_variance,
+        processing_time_ms=result.timings.total_ms,
+        routing_message=result.routing_message,
+        was_bypassed=result.was_bypassed,
         status=SCAN_STATUS_COMPLETED,
     )
     await job_repo.mark_completed(job_id)
 
     logger.info(
-        "scan %s completed in %.1f ms (attempt %d)", scan_id, processing_ms, job.attempt
+        "scan %s completed in %.1f ms (attempt %d), routing: %s",
+        scan_id,
+        result.timings.total_ms,
+        job.attempt,
+        "BYPASS" if result.was_bypassed else "AI",
     )
     return True
 

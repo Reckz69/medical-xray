@@ -37,9 +37,11 @@ Related ADRs: [ADR-006](adr/ADR-006-model-manager.md),
    scikit-image); `@pytest.mark.golden`.
 6. **3.6 orchestrator + executor** — rename seam to `orchestrator.run`,
    produce 4 outputs, persist `model_versions` / `scan.model_id` /
-   `noise_variance` / `processing_time_ms`, mount weights in compose.
+   `noise_variance` / `processing_time_ms` / `routing_message` /
+   `was_bypassed`, mount weights in compose, remove `pipeline.py`.
    Gate: E2E upload → queue → worker → outputs stored → metadata updated →
-   job completed. Only then tag `sprint-3`.
+   job completed. Only then tag `sprint-3`. ✅ done (7a106a0 + working tree,
+   `77 passed` default suite, `3 passed` golden, E2E `test_worker.py` green).
 
 ## Outputs produced per scan
 
@@ -52,10 +54,10 @@ Related ADRs: [ADR-006](adr/ADR-006-model-manager.md),
 
 ## Verification checklist
 
-- [ ] CommonImage decodes `Images/dataset_x-ray1.png`, `Images/high_noise_dicom.dicom`, `Images/low_nosie_dicom.dicom`
-- [ ] `noise_variance` matches legacy `_detect_noise_level` (float, same thresholds)
-- [ ] Bypass vs AI routing matches `run_pipeline` (threshold 8.0)
-- [ ] Enhanced output `psnr > 35` AND `ssim > 0.95` vs legacy output (golden)
-- [ ] `model_versions` row created once with git commit; `scan.model_id` set
-- [ ] `scan.processing_time_ms` persisted from total orchestrator timing
-- [ ] `test_worker.py` happy path asserts 3–4 outputs + metadata
+- [x] CommonImage decodes `Images/dataset_x-ray1.png`, `Images/high_noise_dicom.dicom`, `Images/low_nosie_dicom.dicom`
+- [x] `noise_variance` matches legacy `_detect_noise_level` (float, same thresholds)
+- [x] Bypass vs AI routing matches `run_pipeline` (threshold 8.0)
+- [x] Enhanced output `psnr > 35` AND `ssim > 0.95` vs legacy output (golden)
+- [x] `model_versions` row created once with git commit; `scan.model_id` set
+- [x] `scan.processing_time_ms` persisted from total orchestrator timing
+- [x] `test_worker.py` happy path asserts 4 outputs + metadata + MinIO checksums
