@@ -11,6 +11,7 @@ import jwt as pyjwt
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.core.config import settings
 from gateway.core.db import get_db
 from gateway.core.errors import RateLimitedError, TokenExpiredError, UnauthorizedError
 from gateway.core.otel import get_trace_id
@@ -136,3 +137,24 @@ async def get_audit_logger(
 
 
 AuditLoggerDeps = Annotated[AuditLogger, Depends(get_audit_logger)]
+
+
+# ── Upload / download rate limits (per authenticated user) ────────────────
+async def enforce_upload_rate_limit(current_user: CurrentUserDeps) -> None:
+    limited, retry_after = await is_rate_limited(
+        f"upload:{current_user.id}",
+        settings.rate_limit_upload_per_hour,
+        3600,
+    )
+    if limited:
+        raise RateLimitedError("Upload rate limit exceeded", retry_after=retry_after)
+
+
+async def enforce_download_rate_limit(current_user: CurrentUserDeps) -> None:
+    limited, retry_after = await is_rate_limited(
+        f"download:{current_user.id}",
+        settings.rate_limit_download_per_hour,
+        3600,
+    )
+    if limited:
+        raise RateLimitedError("Download rate limit exceeded", retry_after=retry_after)

@@ -54,6 +54,14 @@ class ScanRepository(BaseRepository):
     async def get_by_id(self, scan_id: UUID) -> Scan | None:
         return await self.session.get(Scan, scan_id)
 
+    async def get_with_outputs(self, scan_id: UUID) -> Scan | None:
+        result = await self.session.execute(
+            select(Scan)
+            .options(*_SCAN_LOADS)
+            .where(Scan.id == scan_id)
+        )
+        return result.scalar_one_or_none()
+
     async def get_owned_by(self, scan_id: UUID, user_id: UUID) -> Scan | None:
         result = await self.session.execute(
             select(Scan)
@@ -61,6 +69,25 @@ class ScanRepository(BaseRepository):
             .where(
                 Scan.id == scan_id,
                 Scan.user_id == user_id,
+                self._active,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active_by_org_and_hash(
+        self, organization_id: UUID, content_hash: str
+    ) -> Scan | None:
+        """Return an active scan with the same bytes in this organization.
+
+        Drives idempotent upload dedup: a matching scan is reused instead of
+        re-uploading the object or enqueueing a new job.
+        """
+        result = await self.session.execute(
+            select(Scan)
+            .options(*_SCAN_LOADS)
+            .where(
+                Scan.organization_id == organization_id,
+                Scan.content_hash == content_hash,
                 self._active,
             )
         )

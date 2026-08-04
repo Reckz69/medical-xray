@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from gateway.models.scan import (
     LIFECYCLE_ARCHIVED,
@@ -90,3 +91,12 @@ class ScanOutputRepository(BaseRepository):
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_for_scan(self, scan_id: UUID) -> list[ScanOutput]:
+        result = await self.session.execute(
+            select(ScanOutput)
+            .options(joinedload(ScanOutput.object))
+            .where(ScanOutput.scan_id == scan_id)
+            .order_by(ScanOutput.type)
+        )
+        return list(result.scalars().all())

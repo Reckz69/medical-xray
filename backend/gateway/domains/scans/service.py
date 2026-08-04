@@ -8,6 +8,8 @@ Upload validation order (never trust Content-Type):
   5. dimensions
   6. size
   7. sha256
+  7b. idempotent dedup — same bytes already in this organization? Reuse the
+      existing scan (no object upload, no job, no publish); otherwise continue
   8. upload original to object storage
   9. create Object row
   10. create Scan row
@@ -29,6 +31,7 @@ from uuid import UUID, uuid4
 
 import pydicom
 from PIL import Image as PILImage
+from sqlalchemy.exc import IntegrityError
 
 from gateway.core.config import settings
 from gateway.core.errors import (
@@ -41,16 +44,23 @@ from gateway.core.errors import (
 from gateway.core.feature_flags import flags
 from gateway.core.queue import CMD_INFERENCE_RUN, queue
 from gateway.core.storage.base import StorageProvider
-from gateway.models.audit import ACTION_DELETE, ACTION_UPLOAD
+from gateway.models.audit import ACTION_DELETE, ACTION_DOWNLOAD, ACTION_UPLOAD
 from gateway.models.scan import (
     FORMAT_DICOM,
     FORMAT_JPEG,
     FORMAT_PNG,
+    OUTPUT_TYPE_ENHANCED,
+    OUTPUT_TYPE_NOISE_MAP,
+    OUTPUT_TYPE_ORIGINAL,
+    OUTPUT_TYPE_UNET,
     SCAN_STATUS_QUEUED,
     Scan,
 )
 from gateway.repositories.job_repository import JobRepository
-from gateway.repositories.object_repository import ObjectRepository
+from gateway.repositories.object_repository import (
+    ObjectRepository,
+    ScanOutputRepository,
+)
 from gateway.repositories.scan_repository import ScanRepository
 
 if TYPE_CHECKING:
@@ -61,6 +71,13 @@ if TYPE_CHECKING:
     from gateway.models.job import Job
 
 logger = logging.getLogger("denoise.scans")
+
+VALID_OUTPUT_TYPES = (
+    OUTPUT_TYPE_ORIGINAL,
+    OUTPUT_TYPE_NOISE_MAP,
+    OUTPUT_TYPE_UNET,
+    OUTPUT_TYPE_ENHANCED,
+)
 
 ALLOWED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".dcm", ".dicom")
 
@@ -217,6 +234,19 @@ async def upload_scan(
     # 7. SHA256
     content_hash = hashlib.sha256(data).hexdigest()
 
+    # 7b. Idempotent dedup: same bytes already in this organization? Reuse the
+    # existing scan — no second object, no second job, no second publish.
+    scan_repo = ScanRepository(session)
+    existing = await scan_repo.get_active_by_org_and_hash(
+        current_user.organization_id, content_hash
+    )
+    if existing is not None:
+        logger.info(
+            "scan upload dedup: reusing scan %s for hash %s (user %s)",
+            existing.id, content_hash[:12], current_user.id,
+        )
+        return {"scan": existing, "job": None, "duplicate": True}
+
     # 8. Upload original to object storage
     object_key = f"scans/{current_user.id}/{uuid4().hex}/{_safe_name(filename)}"
     stored = await storage.upload(
@@ -225,7 +255,6 @@ async def upload_scan(
 
     # 9-11. Object, Scan, Job rows
     object_repo = ObjectRepository(session)
-    scan_repo = ScanRepository(session)
     job_repo = JobRepository(session)
 
     await object_repo.create(
@@ -259,7 +288,22 @@ async def upload_scan(
         resource_id=scan.id,
     )
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Concurrent duplicate: another request inserted the same bytes first.
+        # Roll back and hand back that scan instead of leaking a 500.
+        await session.rollback()
+        existing = await scan_repo.get_active_by_org_and_hash(
+            current_user.organization_id, content_hash
+        )
+        if existing is not None:
+            logger.info(
+                "scan upload dedup (race): reusing scan %s for hash %s",
+                existing.id, content_hash[:12],
+            )
+            return {"scan": existing, "job": None, "duplicate": True}
+        raise
 
     await _publish_inference_run(
         scan=scan,
@@ -299,15 +343,76 @@ async def get_scan(
     *,
     current_user: CurrentUser,
     scan_id: UUID,
-) -> Scan:
-    """Fetch one of the current user's scans (404 if missing/deleted, 403 if foreign)."""
+) -> dict:
+    """Fetch one of the current user's scans (404 if missing/deleted, 403 if foreign).
+
+    Returns ``{"scan": Scan (outputs eager-loaded), "outputs": [ScanOutput, ...]}``.
+    """
+    scan_repo = ScanRepository(session)
+    scan = await scan_repo.get_with_outputs(scan_id)
+    if scan is None or scan.deleted_at is not None:
+        raise NotFoundError("Scan not found")
+    if scan.user_id != current_user.id:
+        raise ForbiddenError("You do not have access to this scan")
+    return {"scan": scan, "outputs": sorted(scan.outputs, key=lambda o: o.type)}
+
+
+async def get_output_url(
+    session: AsyncSession,
+    *,
+    current_user: CurrentUser,
+    storage: StorageProvider,
+    audit: AuditLogger,
+    scan_id: UUID,
+    output_type: str,
+    trace_id: str = "",
+) -> dict:
+    """Return a short-lived presigned URL for one of the scan's outputs.
+
+    Enforces ownership, validates the output exists, logs a DOWNLOAD audit row,
+    and lets the caller's download rate limit gate the request.
+    """
     scan_repo = ScanRepository(session)
     scan = await scan_repo.get_by_id(scan_id)
     if scan is None or scan.deleted_at is not None:
         raise NotFoundError("Scan not found")
     if scan.user_id != current_user.id:
         raise ForbiddenError("You do not have access to this scan")
-    return scan
+
+    if output_type not in VALID_OUTPUT_TYPES:
+        raise NotFoundError(f"Unknown output type: {output_type}")
+
+    output_repo = ScanOutputRepository(session)
+    output = await output_repo.get_for_scan(scan_id, output_type)
+    if output is None:
+        raise NotFoundError(f"No {output_type} output for this scan")
+
+    obj = await ObjectRepository(session).get_by_id(output.object_id)
+    if obj is None:
+        raise NotFoundError(f"Object for {output_type} output is missing")
+
+    download_url = await storage.presign_get(obj.object_key)
+
+    await audit.log(
+        ACTION_DOWNLOAD,
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        resource_type="scan_output",
+        resource_id=output.id,
+    )
+    await session.commit()
+
+    logger.info(
+        "download url issued for scan %s output %s (user %s)",
+        scan_id, output_type, current_user.id,
+    )
+
+    return {
+        "output_type": output_type,
+        "download_url": download_url,
+        "content_type": obj.mime_type,
+        "expires_in": settings.storage_presign_expires_seconds,
+    }
 
 
 async def delete_scan(

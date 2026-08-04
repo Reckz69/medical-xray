@@ -374,6 +374,16 @@
   box-shadow: 0 8px 24px oklch(0.52 0.22 155 / 0.1);
 }
 
+/* Indeterminate progress bar */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.animate-progress-indeterminate {
+  width: 40%;
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+
 /* ============================================
    HERO GRID BACKGROUND
    ============================================ */

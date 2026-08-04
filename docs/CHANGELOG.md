@@ -6,6 +6,49 @@ file.
 
 ## [Unreleased]
 
+### Sprint 3.5 — First authenticated frontend journey (branch `sprint/3-real-ml`)
+
+**Added**
+- Auth UI: `src/app/signin/page.tsx` (login/register toggle, validation, session
+  redirect), `src/lib/auth.tsx` `AuthProvider`/`useAuth` (restore via `me()`,
+  fallback `refreshSession()`; `signIn`/`signUp`/`signOut`), auth-aware
+  `Navbar` (gallery link, avatar, sign in/out).
+- Rewritten `src/lib/api.ts`: `ApiError`, token storage
+  (`denoisex_access_token`), `request()` with `credentials:"include"` and
+  401→refresh retry, typed `Scan`/`ScanList`/`Job`/`User`/`OutputUrl` helpers,
+  `pollJob(jobId, onUpdate)` with cancel handle, `checkHealth` → `/health/live`.
+- `src/app/denoise/page.tsx`: auth gate → upload → `uploadScan` (202) →
+  `pollJob` (300s timeout) → results page with routing banner, inference
+  report, and 4 `OutputCard`s (ORIGINAL / NOISE_MAP / UNET / ENHANCED via
+  presigned URLs).
+- `src/app/gallery/page.tsx`: scan history (`listScans(0,50)`), status chips,
+  expandable scan cards rendering the 4 outputs, refresh.
+- `src/components/OutputCard.tsx`: shared presigned-URL image card (expand
+  overlay, dark processing state, `output-*`/`download-*` ids).
+- Playwright E2E smoke (`frontend/e2e/smoke.spec.ts` + config + PNG fixture +
+  README): register/login → upload → poll to COMPLETED → 4 outputs → download
+  URLs → gallery → logout. Green against live Docker infra.
+- `backend/scripts/benchmark_cpu.py`: CPU baseline via `worker.orchestrator.run`
+  reusing `StageTimings`; report at `docs/benchmarks/cpu-baseline.md` (Apple M2,
+  3 runs/image: bypass ~25–1,600 ms; heavy DICOM PATH A ~28 s inference).
+- Idempotent duplicate-upload dedup: per-org partial unique index
+  `(organization_id, content_hash) WHERE deleted_at IS NULL` (migration
+  `13183f85304c`). Re-uploading identical bytes in the same org returns HTTP 200
+  with `duplicate: true` and reuses the existing scan + outputs — no new object
+  upload, no new job, no republish (IntegrityError race falls back to re-reading
+  the existing scan). Frontend shows an amber duplicate banner.
+- E2E re-runnability: dependency-free in-test PNG fixture
+  (`frontend/e2e/lib/png.ts`, `makeUniqueFixture`) and a persistent
+  env-driven account (`E2E_EMAIL`/`E2E_PASSWORD`) sidestep the 3/day/IP
+  register rate limit.
+
+**Changed**
+- `POST /api/v1/scans` response contract: full `scan` object + nullable
+  `job_id`/`job_status` + `duplicate`/`message`; `202` (accepted) vs `200`
+  (duplicate) documented in `docs/api/openapi.yaml`, which now lints with 0
+  errors (3.1-validated: refs resolved, `nullable` → `type: [x, "null"]`,
+  malformed flow-style descriptions and missing response descriptions fixed).
+
 ### Sprint 3 — Real ML pipeline (in progress, branch `sprint/3-real-ml`)
 
 **Added**

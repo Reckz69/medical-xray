@@ -292,7 +292,6 @@ async def logout(
         clear_refresh_cookie(response)
         return
 
-    user_repo = UserRepository(session)
     cred_repo = CredentialRepository(session)
 
     try:

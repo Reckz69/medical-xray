@@ -149,6 +149,63 @@ async def test_upload_dicom_success(client: AsyncClient) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Idempotent dedup (content_hash per organization)
+# ═══════════════════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_upload_duplicate_is_idempotent(client: AsyncClient) -> None:
+    """Same user re-uploads identical bytes -> 200 duplicate, no new job."""
+    email = f"scan_dup_{uuid.uuid4().hex[:8]}@example.com"
+    token = (await _register(client, email))["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    content = _png_bytes()
+
+    first = await _upload(client, token, "chest.png", content)
+    assert first.status_code == 202, first.text
+    first_data = first.json()["data"]
+    scan_id = first_data["scan"]["id"]
+    first_job = first_data["job_id"]
+
+    second = await _upload(client, token, "chest-copy.png", content)
+    assert second.status_code == 200, second.text
+    second_data = second.json()["data"]
+    assert second_data["duplicate"] is True
+    assert second_data["message"] == "This image has already been uploaded."
+    assert second_data["scan"]["id"] == scan_id
+    assert second_data["job_id"] is None
+    assert second_data["job_status"] is None
+
+    # Still exactly one scan for the user; the first job is unchanged.
+    listing = await client.get("/api/v1/scans", headers=headers)
+    assert listing.json()["data"]["total"] == 1
+
+    job_resp = await client.get(
+        f"/api/v1/jobs/{first_job}", headers=headers
+    )
+    assert job_resp.status_code == 200
+    assert job_resp.json()["data"]["scan_id"] == scan_id
+
+
+@pytest.mark.asyncio
+async def test_upload_same_bytes_cross_org_not_deduped(client: AsyncClient) -> None:
+    """Dedup is per-organization: identical bytes from two orgs both upload."""
+    email_a = f"scan_oa_{uuid.uuid4().hex[:8]}@example.com"
+    email_b = f"scan_ob_{uuid.uuid4().hex[:8]}@example.com"
+    token_a = (await _register(client, email_a))["token"]
+    token_b = (await _register(client, email_b))["token"]
+    content = _png_bytes()
+
+    upload_a = await _upload(client, token_a, "chest.png", content)
+    upload_b = await _upload(client, token_b, "chest.png", content)
+    assert upload_a.status_code == 202, upload_a.text
+    assert upload_b.status_code == 202, upload_b.text
+
+    data_a = upload_a.json()["data"]
+    data_b = upload_b.json()["data"]
+    assert data_b["duplicate"] is False
+    assert data_a["scan"]["id"] != data_b["scan"]["id"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Upload validation failures
 # ═══════════════════════════════════════════════════════════════════════════
 @pytest.mark.asyncio
