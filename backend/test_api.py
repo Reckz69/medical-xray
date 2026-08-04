@@ -1,3 +1,5 @@
+# LEGACY - FROZEN / No new features / Critical bug fixes only / Scheduled for removal after frontend migration.
+
 """
 test_api.py -- Denoise X Backend Test Suite
 ===========================================
