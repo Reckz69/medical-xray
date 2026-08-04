@@ -91,6 +91,14 @@ class ScanRepository(BaseRepository):
         )
         return int(result.scalar_one() or 0)
 
+    async def soft_delete(self, scan_id: UUID, deleted_by: UUID) -> Scan | None:
+        scan = await self.session.get(Scan, scan_id)
+        if scan is not None:
+            scan.deleted_at = datetime.now(UTC)
+            scan.deleted_by = deleted_by
+            await self.session.flush()
+        return scan
+
     async def set_completed(
         self,
         scan_id: UUID,
