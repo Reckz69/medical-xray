@@ -87,7 +87,7 @@ class QueueClient:
         trace_id: str = "",
         correlation_id: str | None = None,
     ) -> None:
-        await self._publish(self._commands, routing_key, payload, trace_id, correlation_id)
+        await self._publish(COMMANDS_EXCHANGE, routing_key, payload, trace_id, correlation_id)
 
     async def publish_event(
         self,
@@ -96,18 +96,19 @@ class QueueClient:
         trace_id: str = "",
         correlation_id: str | None = None,
     ) -> None:
-        await self._publish(self._events, routing_key, payload, trace_id, correlation_id)
+        await self._publish(EVENTS_EXCHANGE, routing_key, payload, trace_id, correlation_id)
 
     async def _publish(
         self,
-        exchange: AbstractExchange | None,
+        exchange_name: str,
         routing_key: str,
         payload: dict[str, Any],
         trace_id: str,
         correlation_id: str | None,
     ) -> None:
-        if self._channel is None or exchange is None:
+        if self._channel is None or self._commands is None or self._events is None:
             await self.connect()
+        exchange = self._commands if exchange_name == COMMANDS_EXCHANGE else self._events
         assert self._channel is not None and exchange is not None
         message = aio_pika.Message(
             body=json.dumps(payload, separators=(",", ":")).encode("utf-8"),

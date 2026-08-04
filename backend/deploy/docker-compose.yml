@@ -2,6 +2,9 @@
 #
 # The gateway/worker run on the host (uvicorn) against these services.
 #   docker compose -f deploy/docker-compose.yml up -d
+# The optional `worker` service runs the Sprint 2B async processor in a
+# container instead of on the host:
+#   docker compose -f deploy/docker-compose.yml up -d worker --build
 services:
   postgres:
     image: postgres:16-alpine
@@ -70,6 +73,23 @@ services:
       mc anonymous set none local/${MINIO_BUCKET:-denoise-xray};
       echo 'bucket ${MINIO_BUCKET:-denoise-xray} ready';
       "
+
+  worker:
+    build:
+      context: ..
+      dockerfile: worker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-denoise}:${POSTGRES_PASSWORD:-denoise}@postgres:5432/${POSTGRES_DB:-denoise}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-denoise}:${RABBITMQ_PASS:-denoise}@rabbitmq:5672/
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${MINIO_BUCKET:-denoise-xray}
+    depends_on:
+      - postgres
+      - rabbitmq
+      - minio
+    restart: unless-stopped
 
 volumes:
   postgres_data:

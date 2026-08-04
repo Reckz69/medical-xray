@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from gateway.models.scan import Scan, ScanOutput
+from gateway.models.scan import SCAN_STATUS_RUNNING, Scan, ScanOutput
 from gateway.repositories.base import BaseRepository
 
 _SCAN_LOADS = (
@@ -96,6 +96,13 @@ class ScanRepository(BaseRepository):
         if scan is not None:
             scan.deleted_at = datetime.now(UTC)
             scan.deleted_by = deleted_by
+            await self.session.flush()
+        return scan
+
+    async def set_running(self, scan_id: UUID) -> Scan | None:
+        scan = await self.session.get(Scan, scan_id)
+        if scan is not None:
+            scan.status = SCAN_STATUS_RUNNING
             await self.session.flush()
         return scan
 
