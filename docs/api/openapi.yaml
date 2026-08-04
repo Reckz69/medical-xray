@@ -80,20 +80,6 @@ components:
         trace_id: 4bf92f3577b34da6a3ce929d0e0e4736
         status: 413
 
-    ErrorCode:
-      type: string
-      enum:
-        - UNAUTHORIZED
-        - TOKEN_EXPIRED
-        - FORBIDDEN
-        - NOT_FOUND
-        - CONFLICT
-        - VALIDATION_ERROR
-        - UNSUPPORTED_FORMAT
-        - SCAN_TOO_LARGE
-        - RATE_LIMITED
-        - INTERNAL_ERROR
-
     User:
       type: object
       required: [id, email, name, role]
@@ -129,7 +115,7 @@ components:
       type: object
       required: [access_token, token_type, expires_in, user]
       properties:
-        access_token: { type: string, description: JWT, 15-minute TTL. }
+        access_token: { type: string, description: "JWT, 15-minute TTL." }
         token_type: { type: string, const: bearer }
         expires_in: { type: integer, description: Seconds. }
         user:
@@ -154,18 +140,17 @@ components:
           type: string
           enum: [PNG, JPEG, DICOM]
         size_bytes: { type: integer }
-        width: { type: integer, nullable: true }
-        height: { type: integer, nullable: true }
-        noise_variance: { type: number, nullable: true }
-        routing_message: { type: string, nullable: true }
-        was_bypassed: { type: boolean, nullable: true }
-        processing_time_ms: { type: number, nullable: true }
+        width: { type: [integer, "null"] }
+        height: { type: [integer, "null"] }
+        noise_variance: { type: [number, "null"] }
+        routing_message: { type: [string, "null"] }
+        was_bypassed: { type: [boolean, "null"] }
+        processing_time_ms: { type: [number, "null"] }
         model:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: "model_name@model_version, e.g. n2n_unet@v1.0.0"
         created_at: { type: string, format: date-time }
-        completed_at: { type: string, format: date-time, nullable: true }
+        completed_at: { type: [string, "null"], format: date-time }
 
     ScanDetail:
       allOf:
@@ -186,7 +171,7 @@ components:
       type: object
       required: [url, method, expires_in]
       properties:
-        url: { type: string, description: Short-lived, object-scoped presigned URL. }
+        url: { type: string, description: "Short-lived, object-scoped presigned URL." }
         method: { type: string, const: GET }
         expires_in: { type: integer, description: Seconds, example: 900 }
 
@@ -222,6 +207,7 @@ paths:
       tags: [System]
       operationId: healthLive
       summary: Liveness — process is up. Does not check dependencies.
+      security: []
       responses:
         "200":
           description: Process alive.
@@ -237,6 +223,7 @@ paths:
       tags: [System]
       operationId: healthReady
       summary: Readiness — checks DB, Redis, RabbitMQ, storage and model.
+      security: []
       responses:
         "200":
           description: All dependencies reachable.
@@ -261,6 +248,7 @@ paths:
       tags: [Auth]
       operationId: register
       summary: Create a user + organization. Respects ENABLE_SIGNUP flag. Rate limit 3/day/IP.
+      security: []
       requestBody:
         required: true
         content:
@@ -292,6 +280,7 @@ paths:
       tags: [Auth]
       operationId: login
       summary: Authenticate. Sets refresh_token httpOnly cookie. Rate limit 5/min/IP.
+      security: []
       requestBody:
         required: true
         content:
@@ -358,6 +347,7 @@ paths:
         - bearerAuth: []
       responses:
         "200":
+          description: Authenticated user profile.
           content:
             application/json:
               schema:
@@ -373,6 +363,7 @@ paths:
       tags: [Auth]
       operationId: forgotPassword
       summary: Placeholder — returns 200 to avoid email enumeration. Notifications deferred.
+      security: []
       requestBody:
         required: true
         content:
@@ -383,7 +374,7 @@ paths:
               properties:
                 email: { type: string, format: email }
       responses:
-        "202": { description: Accepted (always, regardless of whether the email exists). }
+        "202": { description: "Accepted (always, regardless of whether the email exists)." }
 
   /api/v1/scans:
     post:
@@ -393,7 +384,8 @@ paths:
       description: |
         Validates magic bytes, decode, dimensions and 50MB cap, uploads the original
         to object storage, records scan+job rows and publishes `commands.inference.run`.
-        Returns 202 with scan_id; poll `GET /api/v1/scans/{scan_id}` for status.
+        Idempotent dedup: identical bytes already uploaded in this organization return
+        the existing scan with `duplicate: true` (HTTP 200) and enqueue no new job.
         Rate limit 20/hour/user.
       security:
         - bearerAuth: []
@@ -420,10 +412,34 @@ paths:
                     properties:
                       data:
                         type: object
-                        required: [scan_id, status]
+                        required: [scan, job_id, job_status, duplicate, message]
                         properties:
-                          scan_id: { type: string, format: uuid }
-                          status: { $ref: "#/components/schemas/ScanStatus" }
+                          scan: { $ref: "#/components/schemas/ScanDetail" }
+                          job_id: { type: [string, "null"], format: uuid }
+                          job_status:
+                            type: [string, "null"]
+                            enum: [QUEUED, RUNNING, RETRYING, COMPLETED, FAILED, CANCELLED]
+                          duplicate: { type: boolean, default: false }
+                          message: { type: [string, "null"] }
+        "200":
+          description: |
+            Duplicate bytes already uploaded in this organization — the existing scan
+            is returned with `duplicate: true` and no job is enqueued.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          scan: { $ref: "#/components/schemas/ScanDetail" }
+                          job_id: { type: [string, "null"], format: uuid, default: null }
+                          job_status: { type: [string, "null"], default: null }
+                          duplicate: { type: boolean, enum: [true] }
+                          message: { type: [string, "null"] }
         "401": { $ref: "#/components/responses/Error" }
         "413":
           description: SCAN_TOO_LARGE.
@@ -456,6 +472,7 @@ paths:
           schema: { $ref: "#/components/schemas/ScanStatus" }
       responses:
         "200":
+          description: Paginated scan history.
           content:
             application/json:
               schema:
@@ -483,6 +500,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200":
+          description: Scan status and result metadata.
           content:
             application/json:
               schema:
@@ -533,6 +551,7 @@ paths:
           schema: { $ref: "#/components/schemas/OutputType" }
       responses:
         "200":
+          description: Short-lived presigned GET URL for the output.
           content:
             application/json:
               schema:

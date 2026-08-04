@@ -65,7 +65,13 @@ STORAGE_CLASS_GLACIER = "GLACIER"
 class Scan(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "scans"
     __table_args__ = (
-        UniqueConstraint("content_hash", name="uq_scans_content_hash"),
+        Index(
+            "uq_scans_org_content_hash_active",
+            "organization_id",
+            "content_hash",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_scans_user_id_created_at", "user_id", text("created_at DESC")),
         Index("ix_scans_status", "status"),
         Index("ix_scans_deleted_at", "deleted_at"),
@@ -92,7 +98,7 @@ class Scan(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     noise_variance: Mapped[float | None] = mapped_column(Float, nullable=True)
     routing_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     was_bypassed: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("false")
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     processing_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     storage_version: Mapped[int] = mapped_column(

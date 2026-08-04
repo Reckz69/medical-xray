@@ -28,6 +28,8 @@ from gateway.core.queue import queue
 from gateway.core.redis import redis
 from gateway.core.storage import storage
 from gateway.domains.auth import auth_router
+from gateway.domains.jobs import job_router
+from gateway.domains.scans import scan_router
 
 logger = logging.getLogger("denoise")
 
@@ -65,6 +67,8 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix=settings.api_prefix)
+app.include_router(scan_router, prefix=settings.api_prefix)
+app.include_router(job_router, prefix=settings.api_prefix)
 
 
 # ── Error handlers ──────────────────────────────────────────────────────────

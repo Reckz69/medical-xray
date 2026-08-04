@@ -1,3 +1,5 @@
+# LEGACY - FROZEN / No new features / Critical bug fixes only / Scheduled for removal after frontend migration.
+
 """
 inference_engine.py
 --------------------

@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     min_image_dimension: int = 64
     max_image_dimension: int = 8192
 
+    # ── Model (worker) ───────────────────────────────────────────────────────
+    model_path: str = (
+        "../n2n_unet_best_weights04 (2).keras"  # relative to the backend dir
+    )
+    model_name: str = "n2n_unet"
+    model_version: str = "v1.0.0"
+    model_tile: int = 256
+    noise_threshold: float = 8.0
+
     # ── CORS ─────────────────────────────────────────────────────────────────
     cors_origins: list[str] = [
         "http://localhost:3000",

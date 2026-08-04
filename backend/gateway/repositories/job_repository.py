@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from gateway.models.job import (
     DEFAULT_MAX_ATTEMPTS,
@@ -14,6 +15,7 @@ from gateway.models.job import (
     JOB_STATUS_QUEUED,
     Job,
 )
+from gateway.models.scan import Scan
 from gateway.repositories.base import BaseRepository
 
 
@@ -48,6 +50,20 @@ class JobRepository(BaseRepository):
             .where(Job.scan_id == scan_id)
             .order_by(Job.created_at.desc())
             .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_for_user(self, job_id: UUID, user_id: UUID) -> Job | None:
+        """Fetch a job the given user owns (via its scan); None if foreign/missing."""
+        result = await self.session.execute(
+            select(Job)
+            .join(Scan, Scan.id == Job.scan_id)
+            .options(joinedload(Job.scan))
+            .where(
+                Job.id == job_id,
+                Scan.user_id == user_id,
+                Scan.deleted_at.is_(None),
+            )
         )
         return result.scalar_one_or_none()
 
