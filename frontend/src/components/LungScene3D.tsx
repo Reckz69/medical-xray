@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useMemo } from "react";
+import { useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Sphere, MeshDistortMaterial, Float, TorusKnot, Ring } from "@react-three/drei";
+import { MeshDistortMaterial, Float } from "@react-three/drei";
 import * as THREE from "three";
 
 /* ---- Floating anatomical lung-like mesh ---- */
@@ -99,28 +99,30 @@ function ScanRings() {
 }
 
 /* ---- Floating particle dots ---- */
+const PARTICLE_COUNT = 60;
+
+const PARTICLE_POSITIONS = (() => {
+  const arr = new Float32Array(PARTICLE_COUNT * 3);
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    arr[i * 3] = (Math.random() - 0.5) * 8;
+    arr[i * 3 + 1] = (Math.random() - 0.5) * 8;
+    arr[i * 3 + 2] = (Math.random() - 0.5) * 4;
+  }
+  return arr;
+})();
+
 function Particles() {
   const mesh = useRef<THREE.InstancedMesh>(null!);
-  const count = 60;
-
-  const positions = useMemo(() => {
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 8;
-      arr[i * 3 + 1] = (Math.random() - 0.5) * 8;
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 4;
-    }
-    return arr;
-  }, []);
+  const count = PARTICLE_COUNT;
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     for (let i = 0; i < count; i++) {
       const matrix = new THREE.Matrix4();
       matrix.setPosition(
-        positions[i * 3] + Math.sin(t * 0.3 + i) * 0.1,
-        positions[i * 3 + 1] + Math.cos(t * 0.2 + i * 0.5) * 0.15,
-        positions[i * 3 + 2]
+        PARTICLE_POSITIONS[i * 3] + Math.sin(t * 0.3 + i) * 0.1,
+        PARTICLE_POSITIONS[i * 3 + 1] + Math.cos(t * 0.2 + i * 0.5) * 0.15,
+        PARTICLE_POSITIONS[i * 3 + 2]
       );
       mesh.current.setMatrixAt(i, matrix);
     }
