@@ -44,3 +44,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# The repo-root .gitignore uses the Python setuptools template (`lib/`), which
+# would swallow these source dirs. They are real source: tsc/CI resolve
+# @/lib/* and e2e/lib/* from them, so keep them tracked.
+!src/lib/
+!src/lib/*
+!e2e/lib/
+!e2e/lib/*
