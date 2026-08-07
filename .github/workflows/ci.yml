@@ -1,0 +1,107 @@
+# Fast feedback gate — runs on every push to a sprint branch.
+# Fast gates only (no weights, no golden, no Docker build, no E2E):
+#   backend:  ruff -> mypy -> pytest (unit + integration)
+#   frontend: tsc -> eslint
+# The full validation gate (weights, golden, Docker build, Playwright) is
+# `ci-full.yml`, required on PRs to main / pushes to main / manual dispatch.
+#
+# Docs: docs/engineering/ci.md
+name: CI (fast)
+
+on:
+  push:
+    branches:
+      - "sprint/**"
+
+concurrency:
+  group: ci-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend - ruff -> mypy -> pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Create backend .env from template
+        working-directory: backend
+        run: cp .env.example .env
+
+      - name: Ruff
+        working-directory: backend
+        run: python -m ruff check .
+
+      - name: Mypy (scoped gate)
+        working-directory: backend
+        run: python -m mypy --config-file mypy.ini
+
+      - name: Start infra (test override)
+        working-directory: backend
+        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.test.yml up -d
+
+      - name: Wait for infra health
+        working-directory: backend
+        run: |
+          for _ in $(seq 1 60); do
+            if docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.test.yml ps --format '{{.Status}}' | grep -q healthy; then
+              echo "infra healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "infra not healthy in time"
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.test.yml ps
+          exit 1
+
+      - name: Apply migrations
+        working-directory: backend
+        run: python -m alembic upgrade head
+
+      - name: Pytest (unit + integration)
+        working-directory: backend
+        run: python -m pytest -q -p no:cacheprovider
+
+  frontend:
+    name: Frontend - tsc -> eslint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: TypeScript
+        working-directory: frontend
+        run: npx tsc --noEmit --incremental false
+
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
