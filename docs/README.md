@@ -16,6 +16,7 @@ evolves.
 | API | [`api/openapi.yaml`](api/openapi.yaml) | OpenAPI contract (envelope + error codes) |
 | Database | [`database/er.md`](database/er.md) | PostgreSQL ER diagram (9 tables) |
 | Security | [`security/threat-model.md`](security/threat-model.md) | STRIDE threat model |
+| Engineering | [`engineering/ci.md`](engineering/ci.md) | CI/CD workflows, weights release, local equivalents |
 | ADRs | [`adr/`](adr/) | Architecture Decision Records |
 
 ## ADR log
@@ -32,6 +33,7 @@ evolves.
 | [ADR-008](adr/ADR-008-orchestrator.md) | Orchestrator owns the pipeline flow | Accepted |
 | [ADR-009](adr/ADR-009-scheduler.md) | Distributed scheduler for retry/stall/cleanup | Accepted |
 | [ADR-010](adr/ADR-010-observability.md) | Tracing-only OTel, Prometheus metrics, removable overlay | Accepted |
+| [ADR-011](adr/ADR-011-model-artifacts.md) | Model weights via GitHub Releases + SHA-256 gate | Accepted |
 
 ## Conventions that apply to all artifacts
 

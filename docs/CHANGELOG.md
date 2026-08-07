@@ -6,6 +6,51 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4C — CI/CD (branch `sprint/3-real-ml`)
+
+**Added**
+- GitHub Actions CI — two workflows (`docs/engineering/ci.md`):
+  - `ci.yml` (fast, push → `sprint/**`): ruff → mypy → pytest (unit +
+    integration) and tsc → eslint, grouped, with `cancel-in-progress`.
+  - `ci-full.yml` (merge gate, PR→main / push→main / manual): validate →
+    (backend incl. golden, frontend) → Docker build → **Playwright E2E last**,
+    with failure-artifact upload (trace ZIPs + HTML report). Manual dispatch
+    additionally runs the CPU baseline benchmark.
+- `backend/ruff.toml` — the lint gate (`ruff check .` from `backend/`) is now
+  fully clean; `# LEGACY - FROZEN` modules and alembic-generated migrations are
+  excluded by config, not by editing frozen code.
+- ADR-011 Model Artifact Distribution — weights served from GitHub Release
+  `weights-v1`, downloaded in CI via `GITHUB_TOKEN`, verified against a
+  committed manifest (`scripts/weights.sha256`: filename + size + SHA-256) so a
+  missing/corrupt asset fails the pipeline instead of silently skipping tests.
+- `scripts/verify_all.sh` — local gate runner that mirrors `ci-full.yml`
+  stage-for-stage (compose validate → weights → ruff → mypy → pytest → golden →
+  tsc → eslint → e2e), keeping CI and local verification aligned.
+- `backend/requirements-dev.txt` — pinned ruff/mypy/pytest tooling for CI and
+  local dev.
+- `docs/engineering/ci.md` — workflow overview, trigger table, secrets
+  (none beyond `GITHUB_TOKEN`), weights release process, cache strategy, rerun
+  instructions, and local equivalent commands.
+
+**Fixed**
+- Scheduler test flake (root cause): `republish_retries`/`recover_stalled`
+  count *every* due `RETRYING` row in the shared persistent `jobs` table, and
+  six tests assert those global counts — rows left by earlier runs made the
+  suite order- and history-dependent. `tests/test_scheduler.py` now runs an
+  autouse `DELETE FROM jobs` fixture (safe: `jobs` is a leaf table) so each
+  test starts from a clean state. Deterministic across repeated runs.
+- Ruff I001 import ordering in `gateway/models/job.py`.
+- Ruff UP017 in `gateway/core/observability/logging.py` and the two benchmark
+  scripts (`timezone.utc` → `UTC` alias) surfaced by the now-clean lint gate.
+- Dockerized-stack boot bugs surfaced by the full `verify_all.sh` run:
+  - Gateway container crashed at startup — `EmailStr` in the auth schemas
+    needs `email-validator`, which `requirements.txt` did not install (the
+    `pydantic[email]` extra only). Added as an explicit top-level dependency.
+  - Worker container crash-looped — the weights bind-mount source in
+    `deploy/docker-compose.yml` resolved one directory too shallow
+    (Compose resolves relative paths from `deploy/`, so `../../` is required
+    for the repo-root weights). Corrected; model now loads from `/weights`.
+
 ### Sprint 4B — Observability (branch `sprint/3-real-ml`)
 
 **Added**

@@ -23,6 +23,14 @@ Resolved examples (the policy's provenance):
   never said so. Fixed with `assert self._pipeline is not None` after load —
   documents the runtime invariant, fails fast if initialization is ever
   changed, and narrows the type for the shape check.
+- **Scheduler retry tests were order/history-dependent** (Sprint 4C). The
+  flake was a shared-state bug, not a timing race: `republish_retries` /
+  `recover_stalled` count *every* due `RETRYING` row in the persistent `jobs`
+  table, and six tests assert those global counts — rows left by earlier runs
+  made the suite order- and history-dependent. Fixed with an autouse
+  `DELETE FROM jobs` fixture in `tests/test_scheduler.py` (safe because `jobs`
+  is a leaf table), making the counts deterministic. Root cause, fixed by test
+  isolation — the assertions were not weakened.
 
 Rule: if a Category A item is found, fix it in the same session — do not add it
 to this register as "open".
