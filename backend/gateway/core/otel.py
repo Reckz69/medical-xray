@@ -16,10 +16,11 @@ and builds on top of this same identifier.
 
 import re
 import uuid
-from collections.abc import Awaitable, Callable
 
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from gateway.core.observability.logging import log_context
 
 _TRACEPARENT_RE = re.compile(r"^00-([0-9a-f]{32})-(?:[0-9a-f]{16})-01$")
 
@@ -47,13 +48,10 @@ def get_trace_id(request: Request) -> str:
 class TraceIDMiddleware:
     """Assign `trace_id` to every request and echo it as `X-Request-ID`."""
 
-    def __init__(
-        self,
-        app: Callable[[Request, callable], Awaitable[Response]],
-    ) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -66,7 +64,7 @@ class TraceIDMiddleware:
         )
         request.state.trace_id = trace_id
 
-        async def send_wrapper(message):
+        async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = message.get("headers", [])
                 message["headers"] = list(headers) + [
@@ -74,4 +72,5 @@ class TraceIDMiddleware:
                 ]
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        with log_context(trace_id=trace_id, request_id=trace_id):
+            await self.app(scope, receive, send_wrapper)

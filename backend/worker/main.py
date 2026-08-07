@@ -19,7 +19,7 @@ import aio_pika
 from aio_pika import ExchangeType
 
 from gateway.core.config import settings
-from gateway.core.logging import configure_logging
+from gateway.core.observability import init_observability, log_context
 from gateway.core.queue import CMD_INFERENCE_RUN, COMMANDS_EXCHANGE
 from worker import executor
 from worker.consumer import handle_inference_run
@@ -37,15 +37,24 @@ async def _on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
             payload.get("scan_id"),
             payload.get("job_id"),
         )
-        await handle_inference_run(
-            payload,
+        with log_context(
             trace_id=headers.get("trace_id", ""),
-            correlation_id=headers.get("correlation_id", ""),
-        )
+            scan_id=payload.get("scan_id", ""),
+            job_id=payload.get("job_id", ""),
+        ):
+            await handle_inference_run(
+                payload,
+                trace_id=headers.get("trace_id", ""),
+                correlation_id=headers.get("correlation_id", ""),
+            )
 
 
 async def main() -> None:
-    configure_logging("DEBUG" if settings.debug else "INFO")
+    init_observability(
+        service="worker",
+        log_level="DEBUG" if settings.debug else "INFO",
+        otel_enabled=settings.otel_enabled,
+    )
     await asyncio.to_thread(executor.model_manager.startup)
     logger.info(
         "model %s (%s) ready [gpu=%s]",

@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import time
+import uuid
 from datetime import UTC, datetime
 
 import aio_pika
@@ -25,7 +26,7 @@ from aio_pika import ExchangeType
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
-from gateway.core.logging import configure_logging
+from gateway.core.observability import init_observability, log_context
 from gateway.core.queue import CMD_CLEANUP_RUN, COMMANDS_EXCHANGE, queue
 from gateway.core.redis import redis
 from scheduler import retry_jobs
@@ -91,7 +92,11 @@ async def _consume_cleanup_commands(cleanup_service: CleanupService) -> None:
 
 
 async def main() -> None:
-    configure_logging("DEBUG" if settings.debug else "INFO")
+    init_observability(
+        service="scheduler",
+        log_level="DEBUG" if settings.debug else "INFO",
+        otel_enabled=settings.otel_enabled,
+    )
     logger.info(
         "scheduler starting: poll=%ds cleanup=%ds stall=%ds lock_ttl=%ds",
         settings.scheduler_poll_interval_seconds,
@@ -107,19 +112,22 @@ async def main() -> None:
     try:
         while True:
             cycle_started = time.monotonic()
-            try:
-                await run_once()
-            except Exception as exc:
-                logger.exception("scheduler cycle failed")
-                metrics.last_error = str(exc)
+            # One trace id per cycle so all of a cycle's log lines correlate.
+            cycle_trace_id = uuid.uuid4().hex
+            with log_context(trace_id=cycle_trace_id):
+                try:
+                    await run_once()
+                except Exception as exc:
+                    logger.exception("scheduler cycle failed")
+                    metrics.last_error = str(exc)
 
-            if (
-                time.monotonic() - last_cleanup
-                >= settings.scheduler_cleanup_interval_seconds
-            ):
-                report = await cleanup_service.run_cleanup(source="timer")
-                last_cleanup = time.monotonic()
-                logger.info("scheduler cleanup (timer): %s", report)
+                if (
+                    time.monotonic() - last_cleanup
+                    >= settings.scheduler_cleanup_interval_seconds
+                ):
+                    report = await cleanup_service.run_cleanup(source="timer")
+                    last_cleanup = time.monotonic()
+                    logger.info("scheduler cleanup (timer): %s", report)
 
             _touch_heartbeat()
             elapsed = time.monotonic() - cycle_started

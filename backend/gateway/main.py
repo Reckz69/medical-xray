@@ -22,7 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from gateway.core import errors
 from gateway.core.config import settings
 from gateway.core.db import engine
-from gateway.core.logging import configure_logging
+from gateway.core.observability import init_observability
 from gateway.core.otel import TraceIDMiddleware, get_trace_id
 from gateway.core.queue import queue
 from gateway.core.redis import redis
@@ -36,7 +36,11 @@ logger = logging.getLogger("denoise")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging("DEBUG" if settings.debug else "INFO")
+    init_observability(
+        service="gateway",
+        log_level="DEBUG" if settings.debug else "INFO",
+        otel_enabled=settings.otel_enabled,
+    )
     logger.info("%s starting (env=%s)", settings.app_name, settings.environment)
     try:
         await storage.ensure_bucket()

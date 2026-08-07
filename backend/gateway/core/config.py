@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     enable_super_resolution: bool = False
     enable_ai_report: bool = False
 
+    # ── Observability (Sprint 4B, ADR-010) ───────────────────────────────────
+    # OTel SDK wiring (spans + traceparent propagation). When False every
+    # observability component is a no-op; no collector/Jaeger is required.
+    otel_enabled: bool = False
+
     # ── Upload validation ────────────────────────────────────────────────────
     max_upload_size_mb: int = 50
     min_image_dimension: int = 64
