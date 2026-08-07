@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     object_archive_days: int = 30
     object_delete_days: int = 365
 
+    # ── Scheduler / job resilience ───────────────────────────────────────────
+    job_stall_timeout_seconds: int = 600  # RUNNING beyond this -> recovered
+    job_retry_backoff_base_seconds: int = 30  # attempt n -> base * 2^(n-1), capped
+    job_retry_backoff_max_seconds: int = 3600
+    scheduler_poll_interval_seconds: int = 30  # retry/republish cadence
+    scheduler_cleanup_interval_seconds: int = 3600  # purge + lifecycle cadence
+    scan_purge_days: int = 30  # soft-deleted scans hard-deleted after this
+    cleanup_batch_size: int = 100
+
     # ── Rate limits (per-window) ─────────────────────────────────────────────
     rate_limit_login_per_minute: int = 5
     rate_limit_register_per_day: int = 3

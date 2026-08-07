@@ -79,6 +79,9 @@ VALID_OUTPUT_TYPES = (
     OUTPUT_TYPE_ENHANCED,
 )
 
+# Jobs the worker will never touch again (ADR-009).
+_TERMINAL_JOB_STATUSES = ("COMPLETED", "FAILED", "CANCELLED")
+
 ALLOWED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".dcm", ".dicom")
 
 _EXTENSION_TO_FORMAT = {
@@ -141,7 +144,7 @@ def _decode_dimensions(data: bytes, fmt: str) -> tuple[int, int]:
     return int(image.width), int(image.height)
 
 
-async def _publish_inference_run(
+def _build_inference_payload(
     *,
     scan: Scan,
     job: Job,
@@ -150,10 +153,13 @@ async def _publish_inference_run(
     user_id: UUID,
     size_bytes: int,
     content_hash: str,
-    trace_id: str,
-) -> None:
-    """Publish the inference.run command; a broker outage must not fail the upload."""
-    payload = {
+) -> dict:
+    """The `inference.run` command payload.
+
+    Persisted on the Job at creation so the scheduler can republish a retry
+    without reconstructing it from the DB (ADR-009).
+    """
+    return {
         "type": CMD_INFERENCE_RUN,
         "scan_id": str(scan.id),
         "job_id": str(job.id),
@@ -165,12 +171,16 @@ async def _publish_inference_run(
         "size_bytes": size_bytes,
         "checksum": content_hash,
     }
+
+
+async def _publish_inference_run(payload: dict, *, trace_id: str) -> None:
+    """Publish the inference.run command; a broker outage must not fail the upload."""
     try:
         await queue.publish_command(CMD_INFERENCE_RUN, payload, trace_id=trace_id)
     except Exception as exc:  # noqa: BLE001 — broker outage must not fail the upload
         logger.warning(
             "failed to publish inference.run for scan %s (job stays QUEUED): %s",
-            scan.id,
+            payload.get("scan_id"),
             exc,
         )
 
@@ -279,6 +289,15 @@ async def upload_scan(
     )
 
     job = await job_repo.create(scan_id=scan.id, trace_id=trace_id)
+    job.payload = _build_inference_payload(
+        scan=scan,
+        job=job,
+        stored=stored,
+        detected_format=detected_format,
+        user_id=current_user.id,
+        size_bytes=size_bytes,
+        content_hash=content_hash,
+    )
 
     await audit.log(
         ACTION_UPLOAD,
@@ -305,16 +324,7 @@ async def upload_scan(
             return {"scan": existing, "job": None, "duplicate": True}
         raise
 
-    await _publish_inference_run(
-        scan=scan,
-        job=job,
-        stored=stored,
-        detected_format=detected_format,
-        user_id=current_user.id,
-        size_bytes=size_bytes,
-        content_hash=content_hash,
-        trace_id=trace_id,
-    )
+    await _publish_inference_run(job.payload, trace_id=trace_id)
 
     logger.info(
         "scan uploaded: %s (%s, %dx%d, %d bytes) by user %s",
@@ -422,13 +432,24 @@ async def delete_scan(
     audit: AuditLogger,
     scan_id: UUID,
 ) -> None:
-    """Soft-delete one of the current user's scans."""
+    """Soft-delete one of the current user's scans.
+
+    An in-flight job is CANCELLED (and the scan marked CANCELLED) so the worker
+    skips it; the worker's idempotency guard never re-processes cancelled work.
+    """
     scan_repo = ScanRepository(session)
     scan = await scan_repo.get_by_id(scan_id)
     if scan is None or scan.deleted_at is not None:
         raise NotFoundError("Scan not found")
     if scan.user_id != current_user.id:
         raise ForbiddenError("You do not have access to this scan")
+
+    # Cancel an in-flight (non-terminal) job so it is skipped by the worker.
+    job_repo = JobRepository(session)
+    job = await job_repo.get_by_scan_id(scan.id)
+    if job is not None and job.status not in _TERMINAL_JOB_STATUSES:
+        await job_repo.mark_cancelled(job.id, error="scan deleted by owner")
+        await scan_repo.set_cancelled(scan.id)
 
     await scan_repo.soft_delete(scan.id, deleted_by=current_user.id)
     await audit.log(

@@ -8,9 +8,10 @@
     job COMPLETED -> publish scan.completed
 
 The orchestrator is the real ML pipeline (ADR-008); this module stays
-persistence/transport-only. On any failure the job and scan are marked FAILED
-and a `scan.failed` event is published. The executor is idempotent: a message
-for an already-terminal job is a no-op.
+persistence/transport-only. On failure the job is either marked RETRYING
+(attempt < max_attempts; the scheduler republishes after backoff, ADR-009) or
+terminal FAILED with a `scan.failed` event published. The executor is
+idempotent: a message for an already-terminal job is a no-op.
 """
 
 from __future__ import annotations
@@ -20,10 +21,12 @@ import logging
 import os
 import socket
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from gateway.core.config import settings
 from gateway.core.db import SessionLocal
 from gateway.core.queue import EVT_SCAN_COMPLETED, EVT_SCAN_FAILED, queue
 from gateway.core.storage.factory import storage
@@ -68,10 +71,17 @@ def _safe_name(filename: str) -> str:
     return (PurePath(filename or "").name or "output")[:255]
 
 
+def _backoff_seconds(attempt: int) -> int:
+    """Exponential backoff for the attempt that just failed (ADR-009)."""
+    base = settings.job_retry_backoff_base_seconds
+    cap = settings.job_retry_backoff_max_seconds
+    return min(base * 2 ** (attempt - 1), cap)
+
+
 async def process_message(
     payload: dict[str, Any], *, trace_id: str = "", correlation_id: str = ""
 ) -> None:
-    """Run one inference.run command; the job ends COMPLETED or FAILED."""
+    """Run one inference.run command; the job ends COMPLETED, RETRYING, or FAILED."""
     scan_id = UUID(payload["scan_id"])
     job_id = UUID(payload["job_id"])
     try:
@@ -80,16 +90,17 @@ async def process_message(
             await session.commit()
     except Exception as exc:
         logger.exception("job failed: scan=%s job=%s", scan_id, job_id)
-        await _mark_failed(scan_id, job_id, exc)
-        await _publish_event(
-            EVT_SCAN_FAILED,
-            scan_id=scan_id,
-            job_id=job_id,
-            payload=payload,
-            error=exc,
-            trace_id=trace_id,
-            correlation_id=correlation_id,
-        )
+        retried = await _handle_failure(scan_id, job_id, exc)
+        if not retried:
+            await _publish_event(
+                EVT_SCAN_FAILED,
+                scan_id=scan_id,
+                job_id=job_id,
+                payload=payload,
+                error=exc,
+                trace_id=trace_id,
+                correlation_id=correlation_id,
+            )
         return
     if changed:
         await _publish_event(
@@ -120,10 +131,17 @@ async def _run_job(session: AsyncSession, payload: dict[str, Any]) -> bool:
         logger.info("job %s already terminal (%s); skipping", job.id, job.status)
         return False
 
-    await job_repo.increment_attempt(job_id)
-    await job_repo.claim_started(job_id, worker_id=_WORKER_ID)
+    # Atomic claim: only the first of duplicate/re-delivered messages wins
+    # (ADR-009 idempotency); a job already RUNNING elsewhere is skipped.
+    claimed = await job_repo.claim_for_execution(job_id, worker_id=_WORKER_ID)
+    if not claimed:
+        logger.info("job %s already claimed or in-flight; skipping duplicate", job_id)
+        return False
+    await session.refresh(job)
     await scan_repo.set_running(scan_id)
-    await session.flush()
+    # Commit the claim so a crash mid-job leaves a RECOVERABLE RUNNING row
+    # (attempt + started_at) instead of rolling back to QUEUED (ADR-009).
+    await session.commit()
 
     original = await storage.download(payload["object_key"])
 
@@ -197,13 +215,38 @@ async def _run_job(session: AsyncSession, payload: dict[str, Any]) -> bool:
     return True
 
 
-async def _mark_failed(scan_id: UUID, job_id: UUID, exc: Exception) -> None:
+async def _handle_failure(scan_id: UUID, job_id: UUID, exc: Exception) -> bool:
+    """Record a job failure.
+
+    Returns True when the job was moved to RETRYING (the scheduler republishes
+    it after backoff); False when it hit its attempt cap and is terminal FAILED.
+    """
     error = f"{type(exc).__name__}: {exc}"[:2000]
     async with SessionLocal() as session:
-        await JobRepository(session).mark_failed(job_id, error=error)
+        job_repo = JobRepository(session)
+        job = await job_repo.get_by_id(job_id)
+        if job is None:
+            return False
+
+        if job.attempt < job.max_attempts:
+            delay = _backoff_seconds(job.attempt)
+            await job_repo.mark_retrying(
+                job_id,
+                next_retry_at=datetime.now(UTC) + timedelta(seconds=delay),
+                error=error,
+            )
+            await session.commit()
+            logger.warning(
+                "job %s retryable failure (attempt %d/%d); retrying in %ds: %s",
+                job_id, job.attempt, job.max_attempts, delay, error,
+            )
+            return True
+
+        await job_repo.mark_failed(job_id, error=error)
         await ScanRepository(session).set_failed(scan_id, routing_message=error)
         await session.commit()
-    logger.error("job %s failed: %s", job_id, error)
+        logger.error("job %s failed after %d attempts: %s", job_id, job.attempt, error)
+        return False
 
 
 async def _publish_event(
