@@ -3,7 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-08-07
 - **Deciders:** Architecture review
-- **Related:** [`ADR-006-model-manager.md`](ADR-006-model-manager.md), `docs/engineering/ci.md`, `docs/technical-debt.md`
+- **Related:** [`ADR-006-model-manager.md`](ADR-006-model-manager.md), [`ADR-016`](ADR-016-image-registry.md), `docs/engineering/ci.md`, `docs/technical-debt.md`
+
+> **Note (Sprint 4D):** this ADR's "no GHCR in v1" clause is **reversed by
+> [ADR-016](ADR-016-image-registry.md)** — backend images are published to
+> GHCR. The weights-via-GitHub-Releases decision in this ADR is unchanged.
 
 ## Context
 

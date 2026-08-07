@@ -34,6 +34,12 @@ evolves.
 | [ADR-009](adr/ADR-009-scheduler.md) | Distributed scheduler for retry/stall/cleanup | Accepted |
 | [ADR-010](adr/ADR-010-observability.md) | Tracing-only OTel, Prometheus metrics, removable overlay | Accepted |
 | [ADR-011](adr/ADR-011-model-artifacts.md) | Model weights via GitHub Releases + SHA-256 gate | Accepted |
+| [ADR-012](adr/ADR-012-deployment-architecture.md) | Production = Compose on a VM; K8s documented alternative | Accepted |
+| [ADR-013](adr/ADR-013-https-ingress.md) | HTTPS via Caddy (ACME) at the edge; plain HTTP internal | Accepted |
+| [ADR-014](adr/ADR-014-secrets-management.md) | Generated secrets in `.env`/compose secrets; no committed creds | Accepted |
+| [ADR-015](adr/ADR-015-persistent-state.md) | Self-hosted Postgres/Redis/RabbitMQ/MinIO; managed documented alt | Accepted |
+| [ADR-016](adr/ADR-016-image-registry.md) | GHCR image registry (reverses ADR-011 deferral) | Accepted |
+| [ADR-017](adr/ADR-017-versioning-release.md) | Semver + sprint tags + image tags + weights/schema compatibility matrix | Accepted |
 
 ## Conventions that apply to all artifacts
 
