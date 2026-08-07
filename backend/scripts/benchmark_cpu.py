@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,14 +142,14 @@ def _format_ms(value: float) -> str:
 
 def _render(stats: list[RunStats]) -> str:
     commit = _git_commit()
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     headers = ["metric"] + [s.label for s in stats]
     lines = [
         "# CPU baseline — denoising pipeline",
         "",
         f"- Date: {now}",
         f"- Git commit: `{commit}`",
-        "- Weights: `n2n_unet_best_weights04 (2).keras`",
+        "- Weights: `n2n_unet_best_weights04.keras`",
         f"- Runs per image: {len(stats[0].runs) if stats else 0} timed (+ 1 warmup)",
         "",
         "## Environment",

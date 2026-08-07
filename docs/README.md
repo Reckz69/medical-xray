@@ -16,6 +16,7 @@ evolves.
 | API | [`api/openapi.yaml`](api/openapi.yaml) | OpenAPI contract (envelope + error codes) |
 | Database | [`database/er.md`](database/er.md) | PostgreSQL ER diagram (9 tables) |
 | Security | [`security/threat-model.md`](security/threat-model.md) | STRIDE threat model |
+| Engineering | [`engineering/ci.md`](engineering/ci.md) | CI/CD workflows, weights release, local equivalents |
 | ADRs | [`adr/`](adr/) | Architecture Decision Records |
 
 ## ADR log
@@ -27,6 +28,12 @@ evolves.
 | [ADR-003](adr/ADR-003-presigned-urls.md) | Presigned URLs over image proxying | Accepted |
 | [ADR-004](adr/ADR-004-server-side-encryption.md) | Server-side encryption over app-level AES-GCM | Accepted |
 | [ADR-005](adr/ADR-005-uuid-keys.md) | UUID primary keys everywhere | Accepted |
+| [ADR-006](adr/ADR-006-model-manager.md) | ModelManager load-once lifecycle | Accepted |
+| [ADR-007](adr/ADR-007-common-image.md) | Unified CommonImage for PNG/JPEG/DICOM | Accepted |
+| [ADR-008](adr/ADR-008-orchestrator.md) | Orchestrator owns the pipeline flow | Accepted |
+| [ADR-009](adr/ADR-009-scheduler.md) | Distributed scheduler for retry/stall/cleanup | Accepted |
+| [ADR-010](adr/ADR-010-observability.md) | Tracing-only OTel, Prometheus metrics, removable overlay | Accepted |
+| [ADR-011](adr/ADR-011-model-artifacts.md) | Model weights via GitHub Releases + SHA-256 gate | Accepted |
 
 ## Conventions that apply to all artifacts
 

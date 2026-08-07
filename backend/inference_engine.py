@@ -23,7 +23,7 @@ logger = logging.getLogger("denoise_x.engine")
 # ── lazy-loaded globals ────────────────────────────────────────────────────────
 _model = None
 _MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "n2n_unet_best_weights04 (2).keras"
+    os.path.dirname(__file__), "..", "n2n_unet_best_weights04.keras"
 )
 
 

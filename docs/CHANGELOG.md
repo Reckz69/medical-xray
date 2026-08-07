@@ -6,6 +6,138 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4C — CI/CD (branch `sprint/3-real-ml`)
+
+**Added**
+- GitHub Actions CI — two workflows (`docs/engineering/ci.md`):
+  - `ci.yml` (fast, push → `sprint/**`): ruff → mypy → pytest (unit +
+    integration) and tsc → eslint, grouped, with `cancel-in-progress`.
+  - `ci-full.yml` (merge gate, PR→main / push→main / manual): validate →
+    (backend incl. golden, frontend) → Docker build → **Playwright E2E last**,
+    with failure-artifact upload (trace ZIPs + HTML report). Manual dispatch
+    additionally runs the CPU baseline benchmark.
+- `backend/ruff.toml` — the lint gate (`ruff check .` from `backend/`) is now
+  fully clean; `# LEGACY - FROZEN` modules and alembic-generated migrations are
+  excluded by config, not by editing frozen code.
+- ADR-011 Model Artifact Distribution — weights served from GitHub Release
+  `weights-v1`, downloaded in CI via `GITHUB_TOKEN`, verified against a
+  committed manifest (`scripts/weights.sha256`: filename + size + SHA-256) so a
+  missing/corrupt asset fails the pipeline instead of silently skipping tests.
+- `scripts/verify_all.sh` — local gate runner that mirrors `ci-full.yml`
+  stage-for-stage (compose validate → weights → ruff → mypy → pytest → golden →
+  tsc → eslint → e2e), keeping CI and local verification aligned.
+- `backend/requirements-dev.txt` — pinned ruff/mypy/pytest tooling for CI and
+  local dev.
+- `docs/engineering/ci.md` — workflow overview, trigger table, secrets
+  (none beyond `GITHUB_TOKEN`), weights release process, cache strategy, rerun
+  instructions, and local equivalent commands.
+
+**Fixed**
+- Scheduler test flake (root cause): `republish_retries`/`recover_stalled`
+  count *every* due `RETRYING` row in the shared persistent `jobs` table, and
+  six tests assert those global counts — rows left by earlier runs made the
+  suite order- and history-dependent. `tests/test_scheduler.py` now runs an
+  autouse `DELETE FROM jobs` fixture (safe: `jobs` is a leaf table) so each
+  test starts from a clean state. Deterministic across repeated runs.
+- Ruff I001 import ordering in `gateway/models/job.py`.
+- Ruff UP017 in `gateway/core/observability/logging.py` and the two benchmark
+  scripts (`timezone.utc` → `UTC` alias) surfaced by the now-clean lint gate.
+- Dockerized-stack boot bugs surfaced by the full `verify_all.sh` run:
+  - Gateway container crashed at startup — `EmailStr` in the auth schemas
+    needs `email-validator`, which `requirements.txt` did not install (the
+    `pydantic[email]` extra only). Added as an explicit top-level dependency.
+  - Worker container crash-looped — the weights bind-mount source in
+    `deploy/docker-compose.yml` resolved one directory too shallow
+    (Compose resolves relative paths from `deploy/`, so `../../` is required
+    for the repo-root weights). Corrected; model now loads from `/weights`.
+- Fast `ci.yml` backend job never downloaded the weights, so the
+  model-dependent unit+integration suite (real worker) failed on every push —
+  it now downloads and verifies `weights-v1` like the full gate.
+- Model artifact canonicalized to `n2n_unet_best_weights04.keras`: GitHub
+  Release asset names are sanitized (space → `.`, parens stripped), so the
+  `(2)`-suffixed name could not be stored. Renamed the release asset, the
+  gitignored local file, and every reference (manifest, compose, config,
+  workflows, tests, docs) to the clean name — removing the space/paren
+  footguns that caused the two boot bugs above.
+
+### Sprint 4B — Observability (branch `sprint/3-real-ml`)
+
+**Added**
+- `gateway/core/observability/` — the vendor-facade seam: `logging.py`
+  (structured JSON + correlation context), `metrics.py` (Prometheus facade +
+  no-op when disabled), `tracing.py` (OpenTelemetry tracing-only facade with
+  W3C `traceparent` propagation; disabled mode is a no-op).
+- `TraceIDMiddleware` (`gateway/core/otel.py`) — request runs inside a span
+  that continues the incoming `traceparent`; the OTel trace id becomes the
+  correlation `trace_id` when tracing is on.
+- W3C propagation: `queue.py:build_message_headers` injects the active span's
+  `traceparent`; the worker continues remote traces
+  (`worker/inference.run`, `worker.process_job`, five `pipeline.*` stage
+  spans, `scans.upload.persist`).
+- ADR-010-observability.
+- Deploy overlay (`deploy/observability.yml`): otel-collector (traces),
+  prometheus (scrape), grafana (datasource provisioned) + env overrides that
+  switch gateway/worker/scheduler onto OTLP tracing + Prometheus metrics.
+  Core stack runs without it.
+- `deploy/docker-compose.test.yml` — app services gated behind the `app`
+  compose profile (infra-only bring-up for the pytest suite).
+- `infrastructure/` configs: otel-collector, prometheus scrape, grafana
+  datasource — validated against the real binaries (`promtool`,
+  `otelcol validate`).
+- `scripts/benchmark_observability.py` + `docs/benchmarks/observability-overhead.md`
+  — perf gate: **+0.55%** end-to-end overhead (tracing off vs on, PASS < 5%).
+- Per-phase reviews: `docs/reviews/sprint-4b-phase{1,2,3,4}-review.md`.
+- OTel deps (`opentelemetry-api/sdk/exporter-otlp-proto-http`, tracing-only,
+  justified in `requirements.txt`).
+
+**Fixed**
+- `OTLPSpanExporter` silent span-drop: an explicitly-passed endpoint is used
+  verbatim by the SDK (only the env-var default path gets `/v1/traces`
+  appended), so a bare `http://collector:4318` POSTed to `/` → 404 → every
+  span dropped. The facade now appends the signal path itself
+  (`_otlp_http_endpoint`), caught by the Phase 4 deploy smoke test against a
+  real collector, pinned by `test_otlp_http_endpoint_appends_signal_path`.
+- `@contextmanager` no-op bodies use a plain `yield` (a `yield from
+  contextlib.nullcontext()` raises `TypeError`).
+- `gateway/main.py` startup log read `storage.bucket`, which is not part of the
+  `StorageProvider` contract (only the MinIO provider sets it); it now logs the
+  configured `settings.s3_bucket`. Removes the last full-repo mypy error in a
+  scoped file (rest tracked in `docs/technical-debt.md`).
+
+**Changed**
+- `gateway/main.py`, `worker/main.py`, `scheduler/main.py` — `tracer.shutdown()`
+  in teardown; `init_observability` wires `service`/`otel_exporter`/`otel_endpoint`.
+- Observability is a removable overlay: `docker compose -f
+  deploy/docker-compose.yml -f deploy/observability.yml up -d --build` for the
+  full stack + observability.
+
+### Sprint 4A — Distributed scheduler (branch `sprint/3-real-ml`)
+
+**Added**
+- `scheduler/` package: `main.py` (retry + stall-recovery + cleanup loops),
+  `retry_jobs.py` (due-retry republish, stale-RUNNING recovery, unconfirmed-
+  marker recovery, atomic DB claim), `cleanup.py`, `consumer.py`
+  (`cleanup.run` handler), `metrics.py`, `healthcheck.py` (heartbeat-staleness
+  check), `Dockerfile`.
+- ADR-009-scheduler.
+- `scheduler.cleanup` durable queue bound to `commands`/`cleanup.run`;
+  commands and the internal timer share one `CleanupService.run_cleanup`
+  implementation guarded by a Redis distributed lock (`SET NX PX` +
+  compare-and-delete Lua release) with duration/deleted/archived/failure/skipped
+  metrics.
+- `tests/test_scheduler.py` — republish/stall/unconfirmed/idempotency + cleanup
+  (rows + S3 purge, lock-held skip, lock release, `cleanup.run` source).
+- `deploy/docker-compose.yml` — `gateway` and `scheduler` first-class services
+  (healthchecks, `restart: unless-stopped`, `depends_on` healthy infra);
+  gateway applies migrations on start.
+- `gateway/core/config.py` — `scheduler_cleanup_lock_ttl_seconds`.
+
+**Changed**
+- Scheduler retry/cleanup passes no longer run inside the gateway; they live in
+  the dedicated scheduler process. Cleanup is idempotent and safe against
+  concurrent runs (single implementation, distributed lock, trigger source
+  logged).
+
 ### Sprint 3.5 — First authenticated frontend journey (branch `sprint/3-real-ml`)
 
 **Added**

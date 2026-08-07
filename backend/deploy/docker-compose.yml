@@ -1,10 +1,15 @@
-# Sprint 1 infrastructure: PostgreSQL, Redis, RabbitMQ, MinIO.
+# Denoise X development/infra stack.
 #
-# The gateway/worker run on the host (uvicorn) against these services.
-#   docker compose -f deploy/docker-compose.yml up -d
-# The optional `worker` service runs the Sprint 2B async processor in a
-# container instead of on the host:
-#   docker compose -f deploy/docker-compose.yml up -d worker --build
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Starts the full stack: Gateway, Worker, Scheduler, PostgreSQL, Redis,
+# RabbitMQ, and MinIO together. All configuration is environment-driven (see
+# backend/.env.example); scheduler/retention knobs default to the same values
+# the gateway and worker use on the host.
+#
+# For the pytest integration suite, stop the long-running services first so no
+# worker/scheduler competes with the tests:
+#   docker compose -f deploy/docker-compose.yml stop worker scheduler gateway
 services:
   postgres:
     image: postgres:16-alpine
@@ -74,6 +79,40 @@ services:
       echo 'bucket ${MINIO_BUCKET:-denoise-xray} ready';
       "
 
+  gateway:
+    build:
+      context: ..
+      dockerfile: gateway/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-denoise}:${POSTGRES_PASSWORD:-denoise}@postgres:5432/${POSTGRES_DB:-denoise}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-denoise}:${RABBITMQ_PASS:-denoise}@rabbitmq:5672/
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-minio}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${MINIO_BUCKET:-denoise-xray}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod-0123456789abcdef}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001","http://127.0.0.1:3000"]}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   worker:
     build:
       context: ..
@@ -86,14 +125,57 @@ services:
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: ${MINIO_BUCKET:-denoise-xray}
       # The gitignored weights are mounted at /weights (see volumes).
-      MODEL_PATH: /weights/n2n_unet_best_weights04 (2).keras
+      MODEL_PATH: /weights/n2n_unet_best_weights04.keras
     volumes:
-      - ${MODEL_WEIGHTS_PATH:-../n2n_unet_best_weights04 (2).keras}:/weights/n2n_unet_best_weights04 (2).keras:ro
+      # Compose resolves relative paths from deploy/ (this file's directory),
+      # so the gitignored weights at the repo root need the ../../ prefix.
+      - ${MODEL_WEIGHTS_PATH:-../../n2n_unet_best_weights04.keras}:/weights/n2n_unet_best_weights04.keras:ro
     depends_on:
-      - postgres
-      - rabbitmq
-      - minio
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
     restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: scheduler/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-denoise}:${POSTGRES_PASSWORD:-denoise}@postgres:5432/${POSTGRES_DB:-denoise}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-denoise}:${RABBITMQ_PASS:-denoise}@rabbitmq:5672/
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-minio}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${MINIO_BUCKET:-denoise-xray}
+      SCHEDULER_POLL_INTERVAL_SECONDS: ${SCHEDULER_POLL_INTERVAL_SECONDS:-30}
+      SCHEDULER_CLEANUP_INTERVAL_SECONDS: ${SCHEDULER_CLEANUP_INTERVAL_SECONDS:-3600}
+      SCHEDULER_CLEANUP_LOCK_TTL_SECONDS: ${SCHEDULER_CLEANUP_LOCK_TTL_SECONDS:-3600}
+      JOB_STALL_TIMEOUT_SECONDS: ${JOB_STALL_TIMEOUT_SECONDS:-600}
+      JOB_RETRY_BACKOFF_BASE_SECONDS: ${JOB_RETRY_BACKOFF_BASE_SECONDS:-30}
+      JOB_RETRY_BACKOFF_MAX_SECONDS: ${JOB_RETRY_BACKOFF_MAX_SECONDS:-3600}
+      SCAN_PURGE_DAYS: ${SCAN_PURGE_DAYS:-30}
+      CLEANUP_BATCH_SIZE: ${CLEANUP_BATCH_SIZE:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/scheduler/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres_data:

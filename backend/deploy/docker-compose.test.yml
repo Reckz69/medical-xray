@@ -1,0 +1,28 @@
+# Denoise X — infra-only override for the pytest integration suite (Phase 4).
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.test.yml up -d
+#
+# Brings up exactly the infrastructure the integration tests hit on the host
+# (postgres on :5433, redis :6379, rabbitmq :5672, minio :9000/9001 — see
+# backend/.env.example) with NO long-running gateway/worker/scheduler, so no
+# app process competes with the tests (the suite runs on the host against
+# these containers).
+#
+# The app services are gated behind the "app" profile, so they only start when
+# the profile is explicitly requested:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.test.yml \
+#     --profile app up -d
+#
+# Equivalently for the running stack:
+#
+#   docker compose -f deploy/docker-compose.yml stop gateway worker scheduler
+services:
+  gateway:
+    profiles: ["app"]
+
+  worker:
+    profiles: ["app"]
+
+  scheduler:
+    profiles: ["app"]

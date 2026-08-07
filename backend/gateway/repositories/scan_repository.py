@@ -5,11 +5,18 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from gateway.models.scan import SCAN_STATUS_RUNNING, Scan, ScanOutput
+from gateway.models.job import Job
+from gateway.models.scan import (
+    SCAN_STATUS_CANCELLED,
+    SCAN_STATUS_RUNNING,
+    Object,
+    Scan,
+    ScanOutput,
+)
 from gateway.repositories.base import BaseRepository
 
 _SCAN_LOADS = (
@@ -165,5 +172,49 @@ class ScanRepository(BaseRepository):
             return None
         scan.routing_message = routing_message
         scan.status = "FAILED"
+        await self.session.flush()
+        return scan
+
+    async def set_cancelled(self, scan_id: UUID) -> Scan | None:
+        scan = await self.session.get(Scan, scan_id)
+        if scan is None:
+            return None
+        scan.status = SCAN_STATUS_CANCELLED
+        await self.session.flush()
+        return scan
+
+    async def list_purgeable(
+        self, cutoff: datetime, *, limit: int = 100
+    ) -> list[Scan]:
+        """Soft-deleted scans past the retention window, oldest first (ADR-009)."""
+        result = await self.session.execute(
+            select(Scan)
+            .options(selectinload(Scan.outputs).selectinload(ScanOutput.object))
+            .where(
+                Scan.deleted_at.is_not(None),
+                Scan.deleted_at < cutoff,
+            )
+            .order_by(Scan.deleted_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def purge(self, scan_id: UUID) -> Scan | None:
+        """Hard-delete a scan, its jobs, output rows, and output objects."""
+        scan = await self.session.get(
+            Scan,
+            scan_id,
+            options=(selectinload(Scan.outputs).selectinload(ScanOutput.object),),
+        )
+        if scan is None:
+            return None
+        object_ids = [output.object_id for output in scan.outputs if output.object_id]
+        await self.session.execute(delete(Job).where(Job.scan_id == scan_id))
+        await self.session.delete(scan)
+        await self.session.flush()
+        for object_id in object_ids:
+            obj = await self.session.get(Object, object_id)
+            if obj is not None:
+                await self.session.delete(obj)
         await self.session.flush()
         return scan

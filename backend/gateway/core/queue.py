@@ -29,6 +29,7 @@ from aio_pika import DeliveryMode, ExchangeType
 from aio_pika.abc import AbstractChannel, AbstractExchange, AbstractRobustConnection
 
 from gateway.core.config import settings
+from gateway.core.observability import tracer
 
 COMMANDS_EXCHANGE = "commands"
 EVENTS_EXCHANGE = "events"
@@ -47,6 +48,24 @@ EVT_REPORT_GENERATED = "report.generated"
 
 def new_correlation_id() -> str:
     return uuid.uuid4().hex
+
+
+def build_message_headers(trace_id: str, correlation_id: str | None) -> dict[str, str]:
+    """AMQP headers carrying correlation + W3C trace context.
+
+    ``trace_id`` (legacy correlation, kept for the disabled path) and
+    ``correlation_id`` always ride along; a W3C ``traceparent`` is added when
+    tracing is enabled and a span is active, so the consumer continues the
+    same trace end-to-end (gateway -> RabbitMQ -> worker).
+    """
+    headers = {
+        "trace_id": trace_id or "",
+        "correlation_id": correlation_id or new_correlation_id(),
+    }
+    traceparent = tracer.get_current_traceparent()
+    if traceparent:
+        headers["traceparent"] = traceparent
+    return headers
 
 
 class QueueClient:
@@ -114,10 +133,7 @@ class QueueClient:
             body=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
             content_type="application/json",
             delivery_mode=DeliveryMode.PERSISTENT,
-            headers={
-                "trace_id": trace_id or "",
-                "correlation_id": correlation_id or new_correlation_id(),
-            },
+            headers=build_message_headers(trace_id, correlation_id),
         )
         await exchange.publish(message, routing_key)
 

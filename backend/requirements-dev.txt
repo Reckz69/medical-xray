@@ -1,0 +1,7 @@
+# Dev / gate tooling (Sprint 4C CI + `scripts/verify_all.sh`). Pinned to the
+# exact versions the gate was validated with. Install after requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+ruff==0.16.1
+mypy==2.3.0
+pytest==8.4.2
+pytest-asyncio==0.26.0

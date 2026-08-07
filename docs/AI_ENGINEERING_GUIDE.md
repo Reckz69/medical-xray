@@ -35,6 +35,13 @@ A change is done only when **all** of these hold:
   production bug, a measurable performance bottleneck, or a new requirement.
 - Never add the `data:` prefix to worker-encoded PNGs unless a consumer needs a
   data URI (the worker persists raw bytes; data URIs are a legacy API concern).
+- Never let business code import Prometheus / OpenTelemetry / observability
+  infrastructure directly. Everything observable goes through the single
+  facade in `gateway/core/observability/` (ADR-010), and every facade component
+  has a disabled-mode no-op contract — no `if enabled` branching at call sites.
+- Never add a dependency without a written justification in the review doc:
+  what problem it solves, why existing code cannot solve it, and its cost
+  (footprint, upgrade surface, security).
 
 ## Always
 
@@ -52,6 +59,19 @@ A change is done only when **all** of these hold:
 - Record per-stage timing from day one and persist the total to
   `scan.processing_time_ms`.
 - Add/update an ADR for every significant decision (see `docs/adr/`).
+- Implement one abstraction per review gate. When a gate spans several
+  observability abstractions (logging, metrics, tracing), land and review them
+  one at a time — never multiple facades in a single un-reviewed commit.
+- Write a per-phase review to `docs/reviews/sprint-<n>-phase<m>-review.md`
+  (template: Goal / Files Changed / Architecture Decisions / Tests Added /
+  Ruff / MyPy / Performance Impact / What I Learned / Remaining Technical
+  Debt / Ready for the next phase?) and explain-before-merge every file:
+  why it exists, why here, why not elsewhere, what problem it solves, what
+  alternatives were considered, its blast radius, and which tests protect it.
+  If you cannot answer those, review before moving on.
+- Keep every merge deployable: the app stack must never depend on optional
+  observability infrastructure (Grafana/Jaeger/Collector). Those live in a
+  separate overlay so the core stack runs without them.
 
 ## Review gates (Sprint 3)
 

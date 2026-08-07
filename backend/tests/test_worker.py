@@ -239,7 +239,8 @@ async def test_upload_runs_worker_to_completed(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Failure path: pipeline raises -> job + scan FAILED, scan.failed published
+# Failure path: pipeline raises -> RETRYING (attempt < cap), then terminal
+# FAILED with scan.failed published once attempts are exhausted (ADR-009).
 # ═══════════════════════════════════════════════════════════════════════════
 @pytest.mark.asyncio
 async def test_worker_failure_marks_job_and_scan_failed(
@@ -271,6 +272,23 @@ async def test_worker_failure_marks_job_and_scan_failed(
 
     cmd, headers = await commands_reader.read_one()
     assert cmd["scan_id"] == scan_id
+
+    # 1. First failure (attempt 1 of 3) is retryable: RETRYING, no event yet.
+    await handle_inference_run(cmd, trace_id=headers.get("trace_id", ""))
+    async with SessionLocal() as session:
+        job = await JobRepository(session).get_by_id(uuid.UUID(job_id))
+        assert job is not None
+        assert job.status == "RETRYING"
+        assert job.attempt == 1
+        assert job.next_retry_at is not None
+        assert "model exploded" in job.error
+
+    # 2. Simulate the scheduler requeueing the retry and exhaust the cap.
+    async with SessionLocal() as session:
+        job = await JobRepository(session).get_by_id(uuid.UUID(job_id))
+        job.status = "QUEUED"
+        job.attempt = job.max_attempts - 1
+        await session.commit()
 
     await handle_inference_run(cmd, trace_id=headers.get("trace_id", ""))
 

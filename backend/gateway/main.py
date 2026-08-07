@@ -9,20 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import aio_pika
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from gateway.core import errors
 from gateway.core.config import settings
 from gateway.core.db import engine
-from gateway.core.logging import configure_logging
+from gateway.core.observability import init_observability, metrics, tracer
 from gateway.core.otel import TraceIDMiddleware, get_trace_id
 from gateway.core.queue import queue
 from gateway.core.redis import redis
@@ -36,17 +38,52 @@ logger = logging.getLogger("denoise")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging("DEBUG" if settings.debug else "INFO")
+    init_observability(
+        service="gateway",
+        log_level="DEBUG" if settings.debug else "INFO",
+        otel_enabled=settings.otel_enabled,
+        metrics_enabled=settings.metrics_enabled,
+    )
     logger.info("%s starting (env=%s)", settings.app_name, settings.environment)
     try:
         await storage.ensure_bucket()
-        logger.info("object storage bucket %r ready", storage.bucket)
+        logger.info("object storage bucket %r ready", settings.s3_bucket)
     except Exception as exc:  # noqa: BLE001 — startup must not hard-fail on storage
         logger.warning("object storage not reachable at startup: %s", exc)
     yield
     await queue.close()
     await redis.aclose()
     await engine.dispose()
+    tracer.shutdown()
+
+
+class MetricsMiddleware:
+    """Record gateway HTTP request count + latency (ADR-010).
+
+    The facade returns no-op instruments when metrics are disabled, so this
+    middleware always runs without an ``if enabled`` branch.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "")
+        started = time.perf_counter()
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                status = str(message.get("status", 0))
+                metrics.http_requests_total.labels(method=method, status=status).inc()
+                metrics.http_request_duration_seconds.labels(
+                    method=method, status=status
+                ).observe(time.perf_counter() - started)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 app = FastAPI(
@@ -65,6 +102,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(MetricsMiddleware)
 
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(scan_router, prefix=settings.api_prefix)
@@ -116,6 +154,16 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 @app.get("/health/live", tags=["health"], include_in_schema=False)
 async def health_live() -> dict:
     return {"status": "ok"}
+
+
+# ── Metrics ─────────────────────────────────────────────────────────────────
+if settings.metrics_enabled:
+    @app.get("/metrics", tags=["metrics"], include_in_schema=False)
+    async def metrics_endpoint() -> Response:
+        return Response(
+            content=metrics.render(),
+            media_type=metrics.CONTENT_TYPE_LATEST,
+        )
 
 
 @app.get("/health/ready", tags=["health"], include_in_schema=False)

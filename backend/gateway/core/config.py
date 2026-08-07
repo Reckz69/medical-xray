@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     object_archive_days: int = 30
     object_delete_days: int = 365
 
+    # ── Scheduler / job resilience ───────────────────────────────────────────
+    job_stall_timeout_seconds: int = 600  # RUNNING beyond this -> recovered
+    job_retry_backoff_base_seconds: int = 30  # attempt n -> base * 2^(n-1), capped
+    job_retry_backoff_max_seconds: int = 3600
+    scheduler_poll_interval_seconds: int = 30  # retry/republish cadence
+    scheduler_cleanup_interval_seconds: int = 3600  # purge + lifecycle cadence
+    scheduler_cleanup_lock_ttl_seconds: int = 3600  # Redis distributed lock TTL
+    scan_purge_days: int = 30  # soft-deleted scans hard-deleted after this
+    cleanup_batch_size: int = 100
+
     # ── Rate limits (per-window) ─────────────────────────────────────────────
     rate_limit_login_per_minute: int = 5
     rate_limit_register_per_day: int = 3
@@ -74,6 +84,23 @@ class Settings(BaseSettings):
     enable_super_resolution: bool = False
     enable_ai_report: bool = False
 
+    # ── Observability (Sprint 4B, ADR-010) ───────────────────────────────────
+    # OTel SDK wiring (spans + traceparent propagation). When False every
+    # observability component is a no-op; no collector/Jaeger is required.
+    otel_enabled: bool = False
+
+    # OTel tracing exporter. "otlp-http" sends spans to otel_endpoint (the
+    # collector, or a trace backend directly); "console" prints spans to stdout
+    # for local debugging. The collector is the config-only abstraction for the
+    # trace backend (ADR-010) — swapping Tempo/Jaeger changes only this value.
+    otel_exporter: str = "otlp-http"
+    otel_endpoint: str = "http://collector:4318"
+
+    # Prometheus metrics. When True the gateway serves /metrics on the app
+    # port and the worker/scheduler run a metrics HTTP server on metrics_port.
+    metrics_enabled: bool = False
+    metrics_port: int = 9101  # worker/scheduler scrape port
+
     # ── Upload validation ────────────────────────────────────────────────────
     max_upload_size_mb: int = 50
     min_image_dimension: int = 64
@@ -81,7 +108,7 @@ class Settings(BaseSettings):
 
     # ── Model (worker) ───────────────────────────────────────────────────────
     model_path: str = (
-        "../n2n_unet_best_weights04 (2).keras"  # relative to the backend dir
+        "../n2n_unet_best_weights04.keras"  # relative to the backend dir
     )
     model_name: str = "n2n_unet"
     model_version: str = "v1.0.0"

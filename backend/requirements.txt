@@ -18,6 +18,28 @@ minio>=7.2.0
 bcrypt>=4.1.0
 PyJWT>=2.9.0
 
+# pydantic EmailStr (auth schemas) — the pydantic[email] extra, declared
+# explicitly so the runtime image installs it (missing dep crashed the
+# gateway at boot; caught by the Sprint 4C CI/E2E gate).
+email-validator>=2.1.0
+
+# ── Observability (Sprint 4B, ADR-010) ─────────────────────────────────────
+# Prometheus client for the /metrics scrape endpoint and instrument registry.
+# Justification: the stdlib has no metrics/exposition format; prometheus-client
+# is the reference implementation (pure Python, no C deps) for the Prometheus
+# text format our collector scrapes. Used behind the observability facade only.
+prometheus-client>=0.20.0
+
+# OpenTelemetry SDK + OTLP/HTTP exporter for distributed tracing. Tracing only
+# (spans + W3C traceparent propagation); metrics stay on Prometheus per ADR-010.
+# Justification: the stdlib has no tracing or trace-context propagation;
+# OpenTelemetry is the vendor-neutral standard chosen in ADR-010, and the
+# collector is the config-only swap point for the trace backend (Collector /
+# Tempo / Jaeger). Used behind the observability facade only.
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp-proto-http>=1.24.0
+
 # ── Worker: ML pipeline ─────────────────────────────────────────────────────
 tensorflow>=2.16.0
 opencv-python-headless>=4.9.0

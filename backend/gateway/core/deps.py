@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.core.config import settings
 from gateway.core.db import get_db
 from gateway.core.errors import RateLimitedError, TokenExpiredError, UnauthorizedError
+from gateway.core.observability.logging import set_correlation
 from gateway.core.otel import get_trace_id
 from gateway.core.rate_limit import is_rate_limited
 from gateway.core.security import ACCESS_TOKEN_TYPE, decode_token
@@ -61,6 +62,8 @@ async def get_current_user(request: Request, session: DBSession) -> CurrentUser:
     user = await UserRepository(session).get_active_by_id(user_id)
     if user is None or user.status != STATUS_ACTIVE:
         raise UnauthorizedError("Account not found or inactive")
+
+    set_correlation(user_id=str(user.id))
 
     return CurrentUser(
         id=user.id,

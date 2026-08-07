@@ -1,0 +1,13 @@
+# Ruff gate config — the CI job runs `ruff check .` from `backend/`.
+target-version = "py311"
+line-length = 88
+
+# `# LEGACY - FROZEN` modules pending removal (see `docs/technical-debt.md`)
+# and Alembic-generated migrations are excluded from the lint gate entirely;
+# do not "fix" them. The `./` prefix anchors each pattern to `backend/`.
+extend-exclude = [
+    "./main.py",
+    "./inference_engine.py",
+    "./test_api.py",
+    "./db/alembic/versions/*.py",
+]
