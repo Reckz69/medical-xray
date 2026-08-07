@@ -105,9 +105,16 @@ from `gateway.domains`. This is the seam for extracting it into a GPU pod.
 
 ### Scheduler (`scheduler/`)
 
-Entrypoints run on a cron / K8s CronJob: `cleanup.py` (soft-delete purge +
-object lifecycle: 30d archive / 365d delete), `retry_jobs.py` (requeue stale
-RUNNING/RETRYING jobs), `metrics.py`.
+Long-running process (compose service with its own image + heartbeat
+healthcheck, ADR-009). Every `scheduler_poll_interval_seconds` it runs a retry
+pass: re-issue due `RETRYING` jobs, recover stalled `RUNNING` jobs, and
+re-issue unconfirmed `QUEUED` republishes — each claimed atomically so
+multiple scheduler instances never double-publish. Cleanup (soft-delete purge
++ object lifecycle) runs via the internal timer and on demand through the
+`cleanup.run` command consumer; both share one
+`CleanupService.run_cleanup` implementation guarded by a Redis distributed
+lock. Future CronJob / EventBridge triggers can drive the same pass without
+changing cleanup logic.
 
 ### Object storage (MinIO locally, S3 in prod)
 

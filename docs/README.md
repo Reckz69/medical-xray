@@ -27,6 +27,10 @@ evolves.
 | [ADR-003](adr/ADR-003-presigned-urls.md) | Presigned URLs over image proxying | Accepted |
 | [ADR-004](adr/ADR-004-server-side-encryption.md) | Server-side encryption over app-level AES-GCM | Accepted |
 | [ADR-005](adr/ADR-005-uuid-keys.md) | UUID primary keys everywhere | Accepted |
+| [ADR-006](adr/ADR-006-model-manager.md) | ModelManager load-once lifecycle | Accepted |
+| [ADR-007](adr/ADR-007-common-image.md) | Unified CommonImage for PNG/JPEG/DICOM | Accepted |
+| [ADR-008](adr/ADR-008-orchestrator.md) | Orchestrator owns the pipeline flow | Accepted |
+| [ADR-009](adr/ADR-009-scheduler.md) | Distributed scheduler for retry/stall/cleanup | Accepted |
 
 ## Conventions that apply to all artifacts
 

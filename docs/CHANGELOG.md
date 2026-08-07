@@ -6,6 +6,33 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4A — Distributed scheduler (branch `sprint/3-real-ml`)
+
+**Added**
+- `scheduler/` package: `main.py` (retry + stall-recovery + cleanup loops),
+  `retry_jobs.py` (due-retry republish, stale-RUNNING recovery, unconfirmed-
+  marker recovery, atomic DB claim), `cleanup.py`, `consumer.py`
+  (`cleanup.run` handler), `metrics.py`, `healthcheck.py` (heartbeat-staleness
+  check), `Dockerfile`.
+- ADR-009-scheduler.
+- `scheduler.cleanup` durable queue bound to `commands`/`cleanup.run`;
+  commands and the internal timer share one `CleanupService.run_cleanup`
+  implementation guarded by a Redis distributed lock (`SET NX PX` +
+  compare-and-delete Lua release) with duration/deleted/archived/failure/skipped
+  metrics.
+- `tests/test_scheduler.py` — republish/stall/unconfirmed/idempotency + cleanup
+  (rows + S3 purge, lock-held skip, lock release, `cleanup.run` source).
+- `deploy/docker-compose.yml` — `gateway` and `scheduler` first-class services
+  (healthchecks, `restart: unless-stopped`, `depends_on` healthy infra);
+  gateway applies migrations on start.
+- `gateway/core/config.py` — `scheduler_cleanup_lock_ttl_seconds`.
+
+**Changed**
+- Scheduler retry/cleanup passes no longer run inside the gateway; they live in
+  the dedicated scheduler process. Cleanup is idempotent and safe against
+  concurrent runs (single implementation, distributed lock, trigger source
+  logged).
+
 ### Sprint 3.5 — First authenticated frontend journey (branch `sprint/3-real-ml`)
 
 **Added**
