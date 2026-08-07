@@ -16,7 +16,12 @@ evolves.
 | API | [`api/openapi.yaml`](api/openapi.yaml) | OpenAPI contract (envelope + error codes) |
 | Database | [`database/er.md`](database/er.md) | PostgreSQL ER diagram (9 tables) |
 | Security | [`security/threat-model.md`](security/threat-model.md) | STRIDE threat model |
-| Engineering | [`engineering/ci.md`](engineering/ci.md) | CI/CD workflows, weights release, local equivalents |
+| Engineering | [`engineering/ci.md`](engineering/ci.md) | CI/CD workflows, image publishing, weights release, local equivalents |
+| Engineering | [`engineering/deployment.md`](engineering/deployment.md) | Production deployment (Compose on VM), HTTPS/ingress |
+| Engineering | [`engineering/scaling.md`](engineering/scaling.md) | Scaling design (single-VM now, K8s reference) |
+| Engineering | [`engineering/backup-restore.md`](engineering/backup-restore.md) | RPO/RTO, nightly backups, off-site copy, restore runbook |
+| Engineering | [`engineering/secret-rotation.md`](engineering/secret-rotation.md) | Manual rotation runbooks for JWT/Postgres/RabbitMQ/MinIO/Grafana/GHCR |
+| Engineering | [`engineering/production-checklist.md`](engineering/production-checklist.md) | Decision-forcing production readiness checklist |
 | ADRs | [`adr/`](adr/) | Architecture Decision Records |
 
 ## ADR log

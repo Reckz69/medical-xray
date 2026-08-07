@@ -1,6 +1,6 @@
 # Continuous Integration
 
-Denoise X uses GitHub Actions. Two workflows plus a manual-only benchmark,
+Denoise X uses GitHub Actions. Three workflows plus a manual-only benchmark,
 designed so every push gets fast feedback and every merge gets full validation
 without paying the full cost on every commit.
 
@@ -21,8 +21,14 @@ push → sprint/**                 PR → main
                                      └─ e2e   (full stack up → Playwright, LAST)
                                              (uploads playwright-report on any outcome)
 
-workflow_dispatch additionally runs:
-  benchmark (CPU baseline; uploads its report)
+ci-images.yml (publish)          workflow_dispatch additionally runs:
+─────────────────────            benchmark (CPU baseline; uploads its report)
+push → main
+tag → v* / sprint-*              ──
+workflow_dispatch                │
+                                 │
+  build + push → GHCR (gateway, worker, scheduler)
+  tags: latest, <sha>, v<semver>, <sprint-tag>   (ADR-016/017)
 ```
 
 `ci-full.yml` stages are deliberately ordered so expensive work never runs on a
@@ -35,11 +41,12 @@ build, or E2E spend.
 | --- | --- | --- |
 | push to `sprint/**` | `ci.yml` (fast) | ruff, mypy, unit+integration pytest, tsc, eslint |
 | pull request → `main` | `ci-full.yml` | full chain incl. golden, Docker build, Playwright E2E |
-| push to `main` | `ci-full.yml` | full chain |
-| manual `workflow_dispatch` | `ci-full.yml` + `benchmark` | full chain + CPU benchmark |
+| push to `main` | `ci-full.yml` + `ci-images.yml` | full chain + publish images to GHCR |
+| tag `v*` / `sprint-*` | `ci-images.yml` | publish images to GHCR |
+| manual `workflow_dispatch` | `ci-full.yml` + `benchmark` (+ `ci-images.yml`) | full chain + CPU benchmark (+ publish) |
 
-Both workflows use `concurrency: cancel-in-progress`, so a newer push cancels
-the superseded run for the same ref.
+Both CI gates use `concurrency: cancel-in-progress`, so a newer push cancels
+the superseded run for the same ref. `ci-images.yml` also uses it.
 
 The unit + integration pytest suite drives the real worker, which loads the
 model from the repo root — so **both** workflows download and verify the
@@ -51,9 +58,31 @@ Docker build, and Playwright E2E.
 
 **None.** The only credential used is the built-in `GITHUB_TOKEN` (see
 [ADR-011](../adr/ADR-011-model-artifacts.md)); each job sets
-`permissions: contents: read` explicitly. The weights are downloaded from a
-GitHub Release on the same repository with `GH_TOKEN: ${{ github.token }}`,
-which works on private repos without storing a PAT or a service-account secret.
+`permissions` explicitly: `contents: read` on the gates, and
+`contents: read` + `packages: write` on `ci-images.yml` (GHCR publishing,
+ADR-016). The weights are downloaded from a GitHub Release on the same
+repository with `GH_TOKEN: ${{ github.token }}`, which works on private repos
+without storing a PAT or a service-account secret. A production host that runs
+`docker compose pull` needs its own `docker login ghcr.io` credential
+(ADR-014), which is a deploy-time secret, not a CI secret.
+
+## Image publishing (ADR-016/017)
+
+`ci-images.yml` builds `gateway`, `worker`, `scheduler` and pushes them to
+`ghcr.io/<owner>/<service>`, tagged four ways:
+
+| Tag | When |
+| --- | --- |
+| `<full-sha>` | every run (immutable) |
+| `latest` | `main` pushes and `v*` tags |
+| `v<semver>` | `v*` tags (release artifact) |
+| `<sprint-tag>` | `sprint-*` tags (sprint boundary) |
+
+Production consumes them in the "CI-produced artifacts" mode
+(`docker compose pull`, `deploy/production/`); the "dev / first deployment"
+mode builds from source and needs no registry. The owner is
+`github.repository_owner` — for a user account GHCR only allows
+`ghcr.io/USER/<image>` (no `OWNER/REPO` nesting), see ADR-016.
 
 ## Weights release process (ADR-011)
 
@@ -84,8 +113,13 @@ and served from GitHub Release `weights-v1`. To publish a new model:
 | --- | --- | --- |
 | Python deps | `backend` job, `actions/setup-python` | `cache: pip`, keyed by `backend/requirements*.txt` hash |
 | npm deps | `frontend` job, `actions/setup-node` | `cache: npm`, keyed by `frontend/package-lock.json` |
-| Docker layers | `build` / `e2e` jobs | v1 rebuilds the images on the E2E runner (hosted runners don't share images); a GHCR registry that builds once and pulls everywhere is the documented next step |
+| Docker layers | `ci-full` build/e2e jobs | built on the E2E runner (hosted runners don't share images) |
+| Image build layers | `ci-images.yml` | Buildx `type=gha` cache, scoped per service (`images-<service>`) |
 | Infra containers | none | pulled fresh per run from `docker compose` |
+
+Published images (GHCR) are the durable artifact: production pulls them
+instead of rebuilding (`docker compose pull`, ADR-016); `latest` is a moving
+tag, so upgrades pin `<sha>` / `v<semver>` / `<sprint-tag>` (ADR-017).
 
 ## How to rerun failed jobs
 

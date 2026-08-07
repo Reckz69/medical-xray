@@ -62,6 +62,36 @@ flowchart TB
 - The frontend is deployed separately (Vercel recommended) at its own DNS
   record, e.g. `https://app.<SITE_DOMAIN>`; `CORS_ORIGINS` points at it.
 
+## HTTPS / ingress flow (ADR-013)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant D as DNS
+    participant C as Caddy (:443)
+    participant G as gateway:8000
+    participant F as frontend (Vercel)
+
+    B->>D: api.<domain>
+    B->>C: HTTPS request
+    C-->>C: terminate TLS (Let's Encrypt, auto-renew)
+    C->>G: plain HTTP (internal network)
+    G-->>C: response
+    C-->>B: HTTPS response
+
+    alt frontend served by Vercel
+        B->>D: app.<domain>
+        B->>F: HTTPS (Vercel edge)
+    else frontend containerized on VM
+        B->>D: <domain>
+        B->>C: HTTPS request
+        C->>F: reverse_proxy ($FRONTEND_UPSTREAM)
+    end
+```
+
+Caddy issues and renews certificates automatically (ACME); nothing else on the
+VM is reachable from the internet (ADR-013).
+
 ## Two supported deployment modes
 
 The production compose file (`deploy/production/docker-compose.yml`) carries

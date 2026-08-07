@@ -6,6 +6,44 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4D — Production readiness
+
+**Added**
+- Production Compose (ADR-012): `deploy/production/docker-compose.yml` — Caddy
+  as the only exposed edge (ADR-013), `image:`+`build:` seam for pull-from-GHCR
+  or build-from-source deploys (ADR-016), `${VAR:?}` required secrets,
+  weights mounted `:ro`, healthchecks/restart policies, and
+  `deploy/production/.env.example` + `generate-secrets.sh`
+  (`chmod 600`, no committed creds — ADR-014).
+- `deploy/k8s/` reference manifests (Compose → K8s mapping, documented
+  alternative) and `deploy/terraform/` scaffold (labeled not
+  production-ready; IaaS choice deferred).
+- `ci-images.yml` — GHCR image publishing (ADR-016/017): build + push per
+  service matrix, 4-tag scheme (`latest`, `<sha>`, `v<semver>`,
+  `<sprint-tag>`), `permissions: packages: write`, buildx `type=gha` cache.
+- ADRs 012–017: deployment architecture, HTTPS ingress, secrets management,
+  persistent state, image registry, versioning/release.
+- Ops docs: `docs/engineering/deployment.md` (bring-up, upgrade, rollback,
+  HTTPS sequence), `backup-restore.md` (RPO ≤ 24 h / RTO ≤ 4 h, nightly
+  pg_dump/mc mirror/rabbitmqadmin export, off-site copy requirement, restore
+  runbook, object lifecycle), `secret-rotation.md` (JWT/Postgres/RabbitMQ/
+  MinIO/Grafana/GHCR runbooks), `production-checklist.md` (decision-forcing
+  readiness checklist with SR-1..5 coverage table), `scaling.md` (single-VM
+  ceiling, K8s path reference).
+
+**Changed**
+- `docs/engineering/ci.md` synced with `ci-images.yml`: overview ASCII,
+  trigger table (push `main` → ci-full + ci-images; `v*`/`sprint-*` tags →
+  ci-images), `packages: write` permissions note, image tag table, GHCR
+  cache/duration strategy (ADR-016/017).
+- `docs/README.md` index: engineering section now lists deployment, scaling,
+  backup-restore, secret-rotation, production-checklist.
+
+**Known gaps (recorded, not fixed — see production-checklist)**
+- SR-3 hardening: compose images run as root with unpinned `requirements.txt`;
+  non-root/read-only-root/pinned-tag rollout and SAST/SCA scheduled (SR-5).
+- WAL/PITR for Postgres documented as follow-on; nightly logical dumps only.
+
 ### Sprint 4C — CI/CD (branch `sprint/3-real-ml`)
 
 **Added**
