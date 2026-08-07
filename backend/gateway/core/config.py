@@ -108,7 +108,7 @@ class Settings(BaseSettings):
 
     # ── Model (worker) ───────────────────────────────────────────────────────
     model_path: str = (
-        "../n2n_unet_best_weights04 (2).keras"  # relative to the backend dir
+        "../n2n_unet_best_weights04.keras"  # relative to the backend dir
     )
     model_name: str = "n2n_unet"
     model_version: str = "v1.0.0"

@@ -7,7 +7,7 @@ import pydicom # NEW: The standard library for medical DICOM files
 # ==========================================
 # --- 1. CONFIGURATION ---
 # ==========================================
-MODEL_PATH = 'n2n_unet_best_weights04 (2).keras' 
+MODEL_PATH = 'n2n_unet_best_weights04.keras' 
 # Change this to your actual downloaded DICOM file name
 TEST_IMAGE_PATH = 'low_nosie_dicom.dicom' 
 

@@ -13,7 +13,7 @@ import pytest
 
 from worker.model_manager import ModelManager
 
-_WEIGHTS = pathlib.Path(__file__).resolve().parents[2] / "n2n_unet_best_weights04 (2).keras"
+_WEIGHTS = pathlib.Path(__file__).resolve().parents[2] / "n2n_unet_best_weights04.keras"
 
 pytestmark = pytest.mark.skipif(
     not _WEIGHTS.exists(), reason="model weights not present (gitignored)"

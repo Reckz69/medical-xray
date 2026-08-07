@@ -50,6 +50,15 @@ file.
     `deploy/docker-compose.yml` resolved one directory too shallow
     (Compose resolves relative paths from `deploy/`, so `../../` is required
     for the repo-root weights). Corrected; model now loads from `/weights`.
+- Fast `ci.yml` backend job never downloaded the weights, so the
+  model-dependent unit+integration suite (real worker) failed on every push —
+  it now downloads and verifies `weights-v1` like the full gate.
+- Model artifact canonicalized to `n2n_unet_best_weights04.keras`: GitHub
+  Release asset names are sanitized (space → `.`, parens stripped), so the
+  `(2)`-suffixed name could not be stored. Renamed the release asset, the
+  gitignored local file, and every reference (manifest, compose, config,
+  workflows, tests, docs) to the clean name — removing the space/paren
+  footguns that caused the two boot bugs above.
 
 ### Sprint 4B — Observability (branch `sprint/3-real-ml`)
 

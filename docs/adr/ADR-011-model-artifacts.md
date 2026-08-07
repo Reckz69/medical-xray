@@ -7,7 +7,7 @@
 
 ## Context
 
-The denoising weights (`n2n_unet_best_weights04 (2).keras`, ~89 MB) are a
+The denoising weights (`n2n_unet_best_weights04.keras`, ~89 MB) are a
 runtime dependency of the worker (`MODEL_PATH`), and of three test groups:
 `tests/test_model_manager.py`, `tests/test_inference.py`, and the golden suite
 (`tests/golden/`). They are gitignored (`*.keras`) and until Sprint 4C existed
@@ -29,7 +29,7 @@ on the `denoisex` remote. CI downloads them with the built-in token:
 ```yaml
 GH_TOKEN: ${{ github.token }}
 gh release download weights-v1 \
-  --pattern 'n2n_unet_best_weights04 (2).keras' \
+  --pattern 'n2n_unet_best_weights04.keras' \
   --dir .
 ```
 

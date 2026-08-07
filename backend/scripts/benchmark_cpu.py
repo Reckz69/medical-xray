@@ -149,7 +149,7 @@ def _render(stats: list[RunStats]) -> str:
         "",
         f"- Date: {now}",
         f"- Git commit: `{commit}`",
-        "- Weights: `n2n_unet_best_weights04 (2).keras`",
+        "- Weights: `n2n_unet_best_weights04.keras`",
         f"- Runs per image: {len(stats[0].runs) if stats else 0} timed (+ 1 warmup)",
         "",
         "## Environment",

@@ -2,7 +2,7 @@
 
 - Date: 2026-08-04 22:03 UTC
 - Git commit: `2940a51`
-- Weights: `n2n_unet_best_weights04 (2).keras`
+- Weights: `n2n_unet_best_weights04.keras`
 - Runs per image: 3 timed (+ 1 warmup)
 
 ## Environment

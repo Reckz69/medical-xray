@@ -54,13 +54,13 @@ jobs:
         run: python -m mypy --config-file mypy.ini
 
       # The unit + integration suite drives the real worker, which loads the
-      # model from the repo root (backend/../n2n_unet_best_weights04 (2).keras),
+      # model from the repo root (backend/../n2n_unet_best_weights04.keras),
       # so the weights must be present even on the fast gate. A missing or
       # corrupt asset fails this step loudly (ADR-011).
       - name: Download model weights (weights-v1)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download weights-v1 --pattern 'n2n_unet_best_weights04 (2).keras' --dir .
+        run: gh release download weights-v1 --pattern 'n2n_unet_best_weights04.keras' --dir .
 
       - name: Verify weights integrity (ADR-011)
         run: bash scripts/verify_weights.sh

@@ -57,19 +57,19 @@ which works on private repos without storing a PAT or a service-account secret.
 
 ## Weights release process (ADR-011)
 
-The model artifact `n2n_unet_best_weights04 (2).keras` (~89 MB) is gitignored
+The model artifact `n2n_unet_best_weights04.keras` (~89 MB) is gitignored
 and served from GitHub Release `weights-v1`. To publish a new model:
 
 1. Export/build the new `.keras` file.
 2. Compute its checksum and size:
    ```sh
-   shasum -a 256 "n2n_unet_best_weights04 (2).keras"
-   stat -f%z "n2n_unet_best_weights04 (2).keras"
+   shasum -a 256 "n2n_unet_best_weights04.keras"
+   stat -f%z "n2n_unet_best_weights04.keras"
    ```
 3. Update `scripts/weights.sha256` (name, size, sha256) — commit it.
 4. Create the GitHub Release and upload the asset:
    ```sh
-   gh release create weights-vN "n2n_unet_best_weights04 (2).keras"
+   gh release create weights-vN "n2n_unet_best_weights04.keras"
    ```
 5. Bump `MODEL_VERSION` in `backend/.env.example` and
    `backend/gateway/core/config.py` to match the release (keep `weights-vN` ↔

@@ -24,7 +24,7 @@ from worker.model_manager import ModelManager
 from worker.postprocess import encode_png, enhance
 from worker.preprocess import noise_detection
 
-_WEIGHTS = pathlib.Path(__file__).resolve().parents[3] / "n2n_unet_best_weights04 (2).keras"
+_WEIGHTS = pathlib.Path(__file__).resolve().parents[3] / "n2n_unet_best_weights04.keras"
 
 pytestmark = [
     pytest.mark.golden,
