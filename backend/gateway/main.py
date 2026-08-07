@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     logger.info("%s starting (env=%s)", settings.app_name, settings.environment)
     try:
         await storage.ensure_bucket()
-        logger.info("object storage bucket %r ready", storage.bucket)
+        logger.info("object storage bucket %r ready", settings.s3_bucket)
     except Exception as exc:  # noqa: BLE001 — startup must not hard-fail on storage
         logger.warning("object storage not reachable at startup: %s", exc)
     yield

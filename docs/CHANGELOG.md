@@ -45,6 +45,10 @@ file.
   real collector, pinned by `test_otlp_http_endpoint_appends_signal_path`.
 - `@contextmanager` no-op bodies use a plain `yield` (a `yield from
   contextlib.nullcontext()` raises `TypeError`).
+- `gateway/main.py` startup log read `storage.bucket`, which is not part of the
+  `StorageProvider` contract (only the MinIO provider sets it); it now logs the
+  configured `settings.s3_bucket`. Removes the last full-repo mypy error in a
+  scoped file (rest tracked in `docs/technical-debt.md`).
 
 **Changed**
 - `gateway/main.py`, `worker/main.py`, `scheduler/main.py` — `tracer.shutdown()`
