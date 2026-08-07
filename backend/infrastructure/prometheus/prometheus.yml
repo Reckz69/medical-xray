@@ -1,0 +1,25 @@
+# Prometheus scrape config for the Sprint 4B observability overlay.
+#
+# The gateway serves /metrics on the app port (:8000); the worker and scheduler
+# each run a Prometheus HTTP server on METRICS_PORT (:9101) inside their own
+# containers. All three are scraped by service name on the compose network.
+#
+# Targets stay correct regardless of container placement because they are
+# service DNS names, not host ports (ADR-010 scrape map).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:8000"]
+
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9101"]
+
+  - job_name: scheduler
+    static_configs:
+      - targets: ["scheduler:9101"]

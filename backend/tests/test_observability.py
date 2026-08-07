@@ -46,7 +46,7 @@ from gateway.core.observability.logging import (
     set_correlation,
 )
 from gateway.core.observability.metrics import NoopInstrument, metrics
-from gateway.core.observability.tracing import tracer
+from gateway.core.observability.tracing import _otlp_http_endpoint, tracer
 from gateway.core.otel import TraceIDMiddleware
 from gateway.core.queue import build_message_headers
 from gateway.main import MetricsMiddleware
@@ -315,6 +315,17 @@ def test_get_current_traceparent_is_none_when_disabled() -> None:
     with tracer.span_from_traceparent(None, name="x"):
         pass
     assert tracer.get_current_span_context() == (None, None)
+
+
+def test_otlp_http_endpoint_appends_signal_path() -> None:
+    # An explicitly passed OTLP endpoint is used verbatim by the exporter (no
+    # /v1/traces appended), so a bare host:port would POST to "/" and get 404.
+    # The facade must append the signal path itself (caught by the Phase 4
+    # deploy smoke test against a real collector).
+    assert _otlp_http_endpoint("http://collector:4318") == "http://collector:4318/v1/traces"
+    assert _otlp_http_endpoint("http://collector:4318/") == "http://collector:4318/v1/traces"
+    assert _otlp_http_endpoint("http://collector:4318/v1/traces") == "http://collector:4318/v1/traces"
+    assert _otlp_http_endpoint("") == ""
 
 
 def test_build_message_headers_injects_traceparent_when_active() -> None:

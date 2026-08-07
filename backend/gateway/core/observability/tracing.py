@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import urlparse
 
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -93,7 +94,11 @@ class TracerFacade:
     def _default_exporter(self, exporter_name: str, endpoint: str) -> SpanExporter:
         if exporter_name == "console":
             return ConsoleSpanExporter()
-        return OTLPSpanExporter(endpoint=endpoint or None)
+        # An explicitly passed endpoint is used verbatim by the exporter (the
+        # default env-var path is the only one that gets /v1/traces appended),
+        # so a bare host:port would POST to "/" and get 404 — every span
+        # silently dropped. Append the signal path ourselves.
+        return OTLPSpanExporter(endpoint=_otlp_http_endpoint(endpoint) or None)
 
     @contextmanager
     def span(
@@ -167,3 +172,13 @@ class TracerFacade:
 
 
 tracer = TracerFacade()
+
+
+def _otlp_http_endpoint(endpoint: str) -> str:
+    """Return ``endpoint`` with the OTLP/HTTP traces path appended if absent."""
+    if not endpoint:
+        return ""
+    parsed = urlparse(endpoint)
+    if parsed.path and parsed.path != "/":
+        return endpoint
+    return f"{endpoint.rstrip('/')}/v1/traces"
