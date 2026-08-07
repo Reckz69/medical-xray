@@ -36,7 +36,7 @@ import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -234,7 +234,7 @@ def _render(rounds: int, jobs: int, seams: dict[str, float], jobs_stats: dict[st
     lines = [
         "# Observability overhead — tracing OFF vs ON",
         "",
-        f"- Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        f"- Date: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
         f"- Git commit: `{_git_commit()}`",
         f"- Rounds per mode: {rounds + 1} (median taken, last pair order-swapped)",
         f"- Jobs per round: {jobs}",

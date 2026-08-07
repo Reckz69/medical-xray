@@ -28,7 +28,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from gateway.core.observability.tracing import tracer
@@ -57,7 +57,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         correlation = get_correlation()
         entry: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
