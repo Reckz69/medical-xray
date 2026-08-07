@@ -1,0 +1,7 @@
+# Model weights artifact manifest (Sprint 4C, ADR-011).
+# The gate downloads the weights to the repo root and verifies all three
+# fields before any weight-gated test runs. Update this file when publishing
+# a new model (see `docs/engineering/ci.md`).
+name n2n_unet_best_weights04 (2).keras
+size 93651569
+sha256 e401edaef9929692d3077a13fb4b6424436491e594155c9a7f8b0fc4ef7e2871
