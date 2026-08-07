@@ -1,0 +1,56 @@
+# Ingress — replaces Caddy as the TLS edge (ADR-013). Reference scaffold.
+# Requires an ingress controller (ingress-nginx) and cert-manager; the
+# ClusterIssuer must exist (e.g. Let's Encrypt). TLS certs are stored by
+# cert-manager in Secrets automatically.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: denoise-x
+  namespace: denoise-x
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.denoise-x.example.com
+      secretName: denoise-x-tls-api
+  rules:
+    - host: api.denoise-x.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000
+---
+# Frontend ingress — only if the frontend is containerized in-cluster.
+# Default: frontend is served by Vercel at app.<domain> (ADR-016).
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: denoise-x-frontend
+#   namespace: denoise-x
+#   annotations:
+#     cert-manager.io/cluster-issuer: letsencrypt-prod
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts:
+#         - app.denoise-x.example.com
+#       secretName: denoise-x-tls-frontend
+#   rules:
+#     - host: app.denoise-x.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: frontend
+#                 port:
+#                   number: 3000

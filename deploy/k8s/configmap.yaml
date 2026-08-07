@@ -1,0 +1,60 @@
+# Non-secret application config. Mirrors deploy/production/.env.example.
+# Reference scaffold (deploy/k8s/README.md) — values are examples, not tuned.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: denoise-x-config
+  namespace: denoise-x
+  labels:
+    app.kubernetes.io/name: denoise-x
+data:
+  ENVIRONMENT: "production"
+  API_PREFIX: "/api/v1"
+  JWT_ALGORITHM: "HS256"
+  JWT_ISSUER: "denoise-x"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  REFRESH_TOKEN_EXPIRE_DAYS: "30"
+
+  STORAGE_PROVIDER: "minio"
+  S3_ENDPOINT: "http://minio:9000"
+  S3_BUCKET: "denoise-xray"
+  S3_REGION: "us-east-1"
+  S3_USE_SSL: "false"
+  S3_SERVER_SIDE_ENCRYPTION: "true"
+  STORAGE_PRESIGN_EXPIRES_SECONDS: "900"
+  OBJECT_ARCHIVE_DAYS: "30"
+  OBJECT_DELETE_DAYS: "365"
+
+  ENABLE_SIGNUP: "true"
+  ENABLE_DICOM: "true"
+  ENABLE_SUPER_RESOLUTION: "false"
+  ENABLE_AI_REPORT: "false"
+
+  RATE_LIMIT_LOGIN_PER_MINUTE: "5"
+  RATE_LIMIT_REGISTER_PER_DAY: "3"
+  RATE_LIMIT_UPLOAD_PER_HOUR: "20"
+  RATE_LIMIT_DOWNLOAD_PER_HOUR: "300"
+
+  MAX_UPLOAD_SIZE_MB: "50"
+  MIN_IMAGE_DIMENSION: "64"
+  MAX_IMAGE_DIMENSION: "8192"
+
+  MODEL_NAME: "n2n_unet"
+  MODEL_VERSION: "v1.0.0"
+  MODEL_TILE: "256"
+  NOISE_THRESHOLD: "8.0"
+
+  SCHEDULER_POLL_INTERVAL_SECONDS: "30"
+  SCHEDULER_CLEANUP_INTERVAL_SECONDS: "3600"
+  SCHEDULER_CLEANUP_LOCK_TTL_SECONDS: "3600"
+  JOB_STALL_TIMEOUT_SECONDS: "600"
+  JOB_RETRY_BACKOFF_BASE_SECONDS: "30"
+  JOB_RETRY_BACKOFF_MAX_SECONDS: "3600"
+  SCAN_PURGE_DAYS: "30"
+  CLEANUP_BATCH_SIZE: "100"
+
+  OTEL_ENABLED: "false"
+  OTEL_EXPORTER: "otlp-http"
+  OTEL_ENDPOINT: "http://otel-collector:4318"
+  METRICS_ENABLED: "false"
+  METRICS_PORT: "9101"

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: denoise-x
+  labels:
+    app.kubernetes.io/name: denoise-x
+    app.kubernetes.io/part-of: denoise-x

@@ -1,0 +1,91 @@
+# Worker — Deployment. Reference scaffold (deploy/k8s/README.md).
+#
+# The worker is the inference hot path (TensorFlow). It scales on QUEUE DEPTH,
+# not CPU — see docs/engineering/scaling.md. The KEDA ScaledObject below is
+# commented out because it requires the KEDA operator (optional component).
+# Without KEDA the worker is a fixed replica count (default 1) and extra
+# replicas are added by hand or by a horizontal pod autoscaler on CPU.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: denoise-x
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: denoise-x
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/Reckz69/worker:latest # pin <sha>/v<semver>/<sprint-tag>
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: denoise-x-config
+            - secretRef:
+                name: denoise-x-secrets
+          env:
+            - name: DATABASE_URL
+              value: postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+            - name: RABBITMQ_URL
+              value: amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@rabbitmq:5672/
+            - name: S3_ENDPOINT
+              value: http://minio:9000
+            - name: MODEL_PATH
+              value: /weights/n2n_unet_best_weights04.keras
+          # Weights: populated by an init container from the weights-v1 release
+          # (ADR-011) into an emptyDir, or mounted from a PersistentVolume that
+          # already holds the verified file. Both must pass
+          # scripts/verify_weights.sh.
+          # volumeMounts:
+          #   - name: weights
+          #     mountPath: /weights
+          #     readOnly: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      # initContainers:
+      #   - name: fetch-weights
+      #     image: ghcr.io/Reckz69/worker:latest
+      #     command: ["sh", "-c", "gh release download ... && verify"]
+      #     volumeMounts:
+      #       - name: weights
+      #         mountPath: /weights
+      # volumes:
+      #   - name: weights
+      #     emptyDir: {}
+---
+# Requires the KEDA operator. ScaledObject scales worker replicas on the
+# RabbitMQ queue depth (in-flight + ready jobs behind the worker consumer).
+# See docs/engineering/scaling.md.
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: worker
+#   namespace: denoise-x
+# spec:
+#   scaleTargetRef:
+#     name: worker
+#   minReplicaCount: 1
+#   maxReplicaCount: 8
+#   cooldownPeriod: 300
+#   triggers:
+#     - type: rabbitmq
+#       metadata:
+#         protocol: amqp
+#         queueName: jobs
+#         mode: QueueLength
+#         value: "10"
+#         host: amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@rabbitmq:5672
