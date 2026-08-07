@@ -91,6 +91,7 @@ class ModelManager:
             self.gpu_name or "cpu",
         )
         self._pipeline = tf.keras.models.load_model(str(self._model_path), compile=False)
+        assert self._pipeline is not None
         self.git_commit = _git_commit()
 
         in_shape = tuple(self._pipeline.inputs[0].shape[1:])
