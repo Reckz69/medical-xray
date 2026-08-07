@@ -20,6 +20,7 @@ running while they execute (same contract as test_worker.py).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import time
@@ -33,6 +34,7 @@ import pytest
 import pytest_asyncio
 from aio_pika import ExchangeType
 from httpx import AsyncClient
+from minio.error import S3Error
 from PIL import Image
 
 from gateway.core.config import settings
@@ -43,6 +45,7 @@ from gateway.core.queue import (
     EVENTS_EXCHANGE,
     EVT_SCAN_FAILED,
 )
+from gateway.core.redis import redis
 from gateway.core.storage.factory import storage
 from gateway.models.job import (
     JOB_STATUS_COMPLETED,
@@ -59,6 +62,8 @@ from gateway.repositories.object_repository import (
 )
 from gateway.repositories.scan_repository import ScanRepository
 from scheduler import cleanup, retry_jobs
+from scheduler.cleanup import CLEANUP_LOCK_KEY, CleanupService
+from scheduler.consumer import handle_cleanup_run
 from scheduler.metrics import metrics
 from worker import executor
 
@@ -131,14 +136,10 @@ class _QueueReader:
         raise TimeoutError(f"no message for job {job_id}")
 
     async def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await self.queue.delete()
-        except Exception:  # noqa: BLE001 — best-effort teardown
-            pass
-        try:
+        with contextlib.suppress(Exception):
             await self.connection.close()
-        except Exception:  # noqa: BLE001 — best-effort teardown
-            pass
 
 
 async def _bind_reader(exchange_name: str, routing_key: str) -> _QueueReader:
@@ -492,7 +493,7 @@ async def _deleted_scan_with_outputs(client: AsyncClient) -> tuple[str, str, dic
 
 @pytest.mark.asyncio
 async def test_purge_removes_scan_rows_and_objects(client: AsyncClient) -> None:
-    scan_id, job_id, _, keys = await _deleted_scan_with_outputs(client)
+    scan_id, _job_id, _, keys = await _deleted_scan_with_outputs(client)
     now = datetime.now(UTC)
 
     # Age the soft-delete beyond the retention window.
@@ -508,7 +509,7 @@ async def test_purge_removes_scan_rows_and_objects(client: AsyncClient) -> None:
 
     # Every key must be gone from storage.
     for key in keys.values():
-        with pytest.raises(Exception):
+        with pytest.raises(S3Error):
             await storage.download(key)
 
     async with SessionLocal() as session:
@@ -547,6 +548,105 @@ def test_metrics_snapshot_shape() -> None:
         "jobs_payload_missing",
         "scans_purged",
         "objects_purged",
+        "objects_archived",
+        "cleanup_duration_seconds",
+        "cleanup_failures",
+        "cleanup_skipped_runs",
         "last_error",
     ):
         assert key in snap
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CleanupService — single implementation, distributed lock, metrics, sources
+# ═══════════════════════════════════════════════════════════════════════════
+async def _age_soft_deleted(scan_id: str, *, days: int | None = None) -> None:
+    """Backdate a soft-deleted scan past the retention window."""
+    age = days if days is not None else settings.scan_purge_days + 1
+    async with SessionLocal() as session:
+        scan = await session.get(Scan, uuid.UUID(scan_id))
+        assert scan is not None
+        scan.deleted_at = datetime.now(UTC) - timedelta(days=age)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_service_run_reports_timer_source(client: AsyncClient) -> None:
+    scan_id, _, _, _ = await _deleted_scan_with_outputs(client)
+    await _age_soft_deleted(scan_id)
+
+    service = CleanupService()
+    result = await service.run_cleanup(source="timer")
+
+    assert result["source"] == "timer"
+    assert result["skipped"] is False
+    assert result["purged"] >= 1
+    assert result["duration_seconds"] is not None
+    assert metrics.scans_purged >= 1
+    assert metrics.cleanup_duration_seconds is not None
+
+    async with SessionLocal() as session:
+        assert await session.get(Scan, uuid.UUID(scan_id)) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_service_skips_when_lock_held(client: AsyncClient) -> None:
+    scan_id, _, _, _ = await _deleted_scan_with_outputs(client)
+    await _age_soft_deleted(scan_id)
+
+    await redis.delete(CLEANUP_LOCK_KEY)
+    before = metrics.cleanup_skipped_runs
+    service = CleanupService()
+    # Simulate a concurrent scheduler holding the distributed lock.
+    await redis.set(CLEANUP_LOCK_KEY, "other-owner", nx=True, px=60_000)
+    try:
+        result = await service.run_cleanup(source="timer")
+    finally:
+        await redis.delete(CLEANUP_LOCK_KEY)
+
+    assert result["skipped"] is True
+    assert result["reason"] == "lock_held"
+    assert result["purged"] == 0
+    assert metrics.cleanup_skipped_runs == before + 1
+
+    # The aged scan survives — no concurrent purge while the lock is held.
+    async with SessionLocal() as session:
+        assert await session.get(Scan, uuid.UUID(scan_id)) is not None
+
+    # Purge the aged scan so it can't leak into later cleanup runs.
+    await service.run_cleanup(source="timer")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_service_releases_lock_after_run(client: AsyncClient) -> None:
+    scan_id, _, _, _ = await _deleted_scan_with_outputs(client)
+    await _age_soft_deleted(scan_id)
+
+    await redis.delete(CLEANUP_LOCK_KEY)
+    service = CleanupService()
+
+    first = await service.run_cleanup(source="timer")
+    assert first["skipped"] is False
+    assert first["purged"] >= 1
+
+    # The lock was released, so a follow-up run is not skipped.
+    second = await service.run_cleanup(source="timer")
+    assert second["skipped"] is False
+    assert await redis.get(CLEANUP_LOCK_KEY) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_run_command_uses_cleanup_source() -> None:
+    class _FakeService:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def run_cleanup(self, *, source: str, now=None) -> dict:
+            self.calls.append(source)
+            return {"source": source, "purged": 0, "skipped": False}
+
+    fake = _FakeService()
+    result = await handle_cleanup_run({}, service=fake)
+
+    assert fake.calls == ["cleanup.run"]
+    assert result["source"] == "cleanup.run"

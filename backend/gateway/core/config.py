@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     job_retry_backoff_max_seconds: int = 3600
     scheduler_poll_interval_seconds: int = 30  # retry/republish cadence
     scheduler_cleanup_interval_seconds: int = 3600  # purge + lifecycle cadence
+    scheduler_cleanup_lock_ttl_seconds: int = 3600  # Redis distributed lock TTL
     scan_purge_days: int = 30  # soft-deleted scans hard-deleted after this
     cleanup_batch_size: int = 100
 

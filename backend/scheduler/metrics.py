@@ -7,7 +7,7 @@ phase; these counters drive `run_once`'s report and the scheduler tests.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 
 @dataclass
@@ -20,6 +20,10 @@ class SchedulerMetrics:
     jobs_payload_missing: int = 0
     scans_purged: int = 0
     objects_purged: int = 0
+    objects_archived: int = 0
+    cleanup_duration_seconds: float | None = None
+    cleanup_failures: int = 0
+    cleanup_skipped_runs: int = 0
     last_error: str | None = None
 
     def snapshot(self) -> dict:
@@ -32,6 +36,10 @@ class SchedulerMetrics:
             "jobs_payload_missing": self.jobs_payload_missing,
             "scans_purged": self.scans_purged,
             "objects_purged": self.objects_purged,
+            "objects_archived": self.objects_archived,
+            "cleanup_duration_seconds": self.cleanup_duration_seconds,
+            "cleanup_failures": self.cleanup_failures,
+            "cleanup_skipped_runs": self.cleanup_skipped_runs,
             "last_error": self.last_error,
         }
 
