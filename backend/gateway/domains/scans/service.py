@@ -43,7 +43,7 @@ from gateway.core.errors import (
     ValidationError_,
 )
 from gateway.core.feature_flags import flags
-from gateway.core.observability import metrics
+from gateway.core.observability import metrics, tracer
 from gateway.core.queue import CMD_INFERENCE_RUN, queue
 from gateway.core.storage.base import StorageProvider
 from gateway.models.audit import ACTION_DELETE, ACTION_DOWNLOAD, ACTION_UPLOAD
@@ -260,74 +260,76 @@ async def upload_scan(
         return {"scan": existing, "job": None, "duplicate": True}
 
     # 8. Upload original to object storage
-    persist_started = time.perf_counter()
-    object_key = f"scans/{current_user.id}/{uuid4().hex}/{_safe_name(filename)}"
-    stored = await storage.upload(
-        object_key, data, content_type=mime_type, checksum=content_hash
-    )
-
-    # 9-11. Object, Scan, Job rows
-    object_repo = ObjectRepository(session)
-    job_repo = JobRepository(session)
-
-    await object_repo.create(
-        bucket=stored.bucket,
-        object_key=stored.object_key,
-        size_bytes=stored.size_bytes,
-        mime_type=stored.mime_type,
-        checksum=stored.checksum or content_hash,
-        etag=stored.etag,
-    )
-
-    scan = await scan_repo.create(
-        organization_id=current_user.organization_id,
-        user_id=current_user.id,
-        original_name=filename,
-        format=detected_format,
-        size_bytes=size_bytes,
-        content_hash=content_hash,
-        width=width,
-        height=height,
-        status=SCAN_STATUS_QUEUED,
-    )
-
-    job = await job_repo.create(scan_id=scan.id, trace_id=trace_id)
-    job.payload = _build_inference_payload(
-        scan=scan,
-        job=job,
-        stored=stored,
-        detected_format=detected_format,
-        user_id=current_user.id,
-        size_bytes=size_bytes,
-        content_hash=content_hash,
-    )
-
-    await audit.log(
-        ACTION_UPLOAD,
-        user_id=current_user.id,
-        organization_id=current_user.organization_id,
-        resource_type="scan",
-        resource_id=scan.id,
-    )
-
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Concurrent duplicate: another request inserted the same bytes first.
-        # Roll back and hand back that scan instead of leaking a 500.
-        await session.rollback()
-        existing = await scan_repo.get_active_by_org_and_hash(
-            current_user.organization_id, content_hash
+    with tracer.span("scans.upload.persist"):
+        persist_started = time.perf_counter()
+        object_key = f"scans/{current_user.id}/{uuid4().hex}/{_safe_name(filename)}"
+        stored = await storage.upload(
+            object_key, data, content_type=mime_type, checksum=content_hash
         )
-        if existing is not None:
-            logger.info(
-                "scan upload dedup (race): reusing scan %s for hash %s",
-                existing.id, content_hash[:12],
-            )
-            return {"scan": existing, "job": None, "duplicate": True}
-        raise
 
-    metrics.scan_upload_seconds.observe(time.perf_counter() - persist_started)
+        # 9-11. Object, Scan, Job rows
+        object_repo = ObjectRepository(session)
+        job_repo = JobRepository(session)
+
+        await object_repo.create(
+            bucket=stored.bucket,
+            object_key=stored.object_key,
+            size_bytes=stored.size_bytes,
+            mime_type=stored.mime_type,
+            checksum=stored.checksum or content_hash,
+            etag=stored.etag,
+        )
+
+        scan = await scan_repo.create(
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            original_name=filename,
+            format=detected_format,
+            size_bytes=size_bytes,
+            content_hash=content_hash,
+            width=width,
+            height=height,
+            status=SCAN_STATUS_QUEUED,
+        )
+
+        job = await job_repo.create(scan_id=scan.id, trace_id=trace_id)
+        job.payload = _build_inference_payload(
+            scan=scan,
+            job=job,
+            stored=stored,
+            detected_format=detected_format,
+            user_id=current_user.id,
+            size_bytes=size_bytes,
+            content_hash=content_hash,
+        )
+
+        await audit.log(
+            ACTION_UPLOAD,
+            user_id=current_user.id,
+            organization_id=current_user.organization_id,
+            resource_type="scan",
+            resource_id=scan.id,
+        )
+
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Concurrent duplicate: another request inserted the same bytes first.
+            # Roll back and hand back that scan instead of leaking a 500.
+            await session.rollback()
+            existing = await scan_repo.get_active_by_org_and_hash(
+                current_user.organization_id, content_hash
+            )
+            if existing is not None:
+                logger.info(
+                    "scan upload dedup (race): reusing scan %s for hash %s",
+                    existing.id, content_hash[:12],
+                )
+                return {"scan": existing, "job": None, "duplicate": True}
+            raise
+
+        metrics.scan_upload_seconds.observe(time.perf_counter() - persist_started)
+
     await _publish_inference_run(job.payload, trace_id=trace_id)
 
     logger.info(

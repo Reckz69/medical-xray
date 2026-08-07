@@ -29,7 +29,7 @@ from uuid import UUID
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
-from gateway.core.observability import metrics
+from gateway.core.observability import metrics, tracer
 from gateway.core.queue import EVT_SCAN_COMPLETED, EVT_SCAN_FAILED, queue
 from gateway.core.storage.factory import storage
 from gateway.models.job import (
@@ -88,24 +88,25 @@ async def process_message(
     job_id = UUID(payload["job_id"])
     started = time.perf_counter()
     try:
-        try:
-            async with SessionLocal() as session:
-                changed = await _run_job(session, payload)
-                await session.commit()
-        except Exception as exc:
-            logger.exception("job failed: scan=%s job=%s", scan_id, job_id)
-            retried = await _handle_failure(scan_id, job_id, exc)
-            if not retried:
-                await _publish_event(
-                    EVT_SCAN_FAILED,
-                    scan_id=scan_id,
-                    job_id=job_id,
-                    payload=payload,
-                    error=exc,
-                    trace_id=trace_id,
-                    correlation_id=correlation_id,
-                )
-            return
+        with tracer.span("worker.process_job"):
+            try:
+                async with SessionLocal() as session:
+                    changed = await _run_job(session, payload)
+                    await session.commit()
+            except Exception as exc:
+                logger.exception("job failed: scan=%s job=%s", scan_id, job_id)
+                retried = await _handle_failure(scan_id, job_id, exc)
+                if not retried:
+                    await _publish_event(
+                        EVT_SCAN_FAILED,
+                        scan_id=scan_id,
+                        job_id=job_id,
+                        payload=payload,
+                        error=exc,
+                        trace_id=trace_id,
+                        correlation_id=correlation_id,
+                    )
+                return
         if changed:
             await _publish_event(
                 EVT_SCAN_COMPLETED,

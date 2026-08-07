@@ -7,6 +7,7 @@ never calls this directly.
 
 from __future__ import annotations
 
+from gateway.core.config import settings
 from gateway.core.observability.logging import configure_logging, set_correlation
 from gateway.core.observability.metrics import metrics
 from gateway.core.observability.tracing import tracer
@@ -25,6 +26,11 @@ def init_observability(
     no-ops (see the facade contracts in ``metrics.py`` / ``tracing.py``).
     """
     configure_logging(log_level)
-    tracer.configure(enabled=otel_enabled)
+    tracer.configure(
+        enabled=otel_enabled,
+        service=service,
+        exporter_name=settings.otel_exporter,
+        endpoint=settings.otel_endpoint,
+    )
     metrics.configure(enabled=metrics_enabled)
     set_correlation(service=service)

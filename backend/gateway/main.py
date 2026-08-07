@@ -24,7 +24,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from gateway.core import errors
 from gateway.core.config import settings
 from gateway.core.db import engine
-from gateway.core.observability import init_observability, metrics
+from gateway.core.observability import init_observability, metrics, tracer
 from gateway.core.otel import TraceIDMiddleware, get_trace_id
 from gateway.core.queue import queue
 from gateway.core.redis import redis
@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
     await queue.close()
     await redis.aclose()
     await engine.dispose()
+    tracer.shutdown()
 
 
 class MetricsMiddleware:

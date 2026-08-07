@@ -25,6 +25,16 @@ PyJWT>=2.9.0
 # text format our collector scrapes. Used behind the observability facade only.
 prometheus-client>=0.20.0
 
+# OpenTelemetry SDK + OTLP/HTTP exporter for distributed tracing. Tracing only
+# (spans + W3C traceparent propagation); metrics stay on Prometheus per ADR-010.
+# Justification: the stdlib has no tracing or trace-context propagation;
+# OpenTelemetry is the vendor-neutral standard chosen in ADR-010, and the
+# collector is the config-only swap point for the trace backend (Collector /
+# Tempo / Jaeger). Used behind the observability facade only.
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp-proto-http>=1.24.0
+
 # ── Worker: ML pipeline ─────────────────────────────────────────────────────
 tensorflow>=2.16.0
 opencv-python-headless>=4.9.0

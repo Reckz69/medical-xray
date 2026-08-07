@@ -26,7 +26,7 @@ from aio_pika import ExchangeType
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
-from gateway.core.observability import init_observability, log_context
+from gateway.core.observability import init_observability, log_context, tracer
 from gateway.core.observability import metrics as obs_metrics
 from gateway.core.queue import CMD_CLEANUP_RUN, COMMANDS_EXCHANGE, queue
 from gateway.core.redis import redis
@@ -144,6 +144,7 @@ async def main() -> None:
             await consumer_task
         await queue.close()
         await redis.aclose()
+        tracer.shutdown()
 
 
 if __name__ == "__main__":

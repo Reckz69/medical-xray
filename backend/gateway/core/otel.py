@@ -20,9 +20,11 @@ import uuid
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from gateway.core.observability.logging import log_context
+from gateway.core.observability import log_context, tracer
 
-_TRACEPARENT_RE = re.compile(r"^00-([0-9a-f]{32})-(?:[0-9a-f]{16})-01$")
+#: W3C traceparent: version 00, 32-hex trace id, 16-hex span id, any flags
+#: byte (flags bit 0 = sampled; OTel emits 0x01/0x03, both accepted here).
+_TRACEPARENT_RE = re.compile(r"^00-([0-9a-f]{32})-(?:[0-9a-f]{16})-([0-9a-f]{2})$")
 
 #: Header the gateway emits/echoes so edge proxies and the client can correlate.
 REQUEST_ID_HEADER = "x-request-id"
@@ -46,7 +48,14 @@ def get_trace_id(request: Request) -> str:
 
 
 class TraceIDMiddleware:
-    """Assign `trace_id` to every request and echo it as `X-Request-ID`."""
+    """Assign `trace_id` to every request, echo it as `X-Request-ID`, and span it.
+
+    When tracing is enabled the request runs inside a span that continues the
+    incoming ``traceparent`` (or starts a fresh root), and the active span's
+    trace id becomes the correlation ``trace_id`` so the envelope, logs, and
+    RabbitMQ headers all agree. When disabled, the middleware mints the
+    correlation ``trace_id`` as before and the span wrapper is a no-op.
+    """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -57,6 +66,7 @@ class TraceIDMiddleware:
             return
 
         request = Request(scope)
+        method = scope.get("method", "")
         trace_id = (
             request.headers.get(REQUEST_ID_HEADER)
             or parse_traceparent(request.headers.get("traceparent"))
@@ -68,9 +78,23 @@ class TraceIDMiddleware:
             if message["type"] == "http.response.start":
                 headers = message.get("headers", [])
                 message["headers"] = list(headers) + [
-                    (REQUEST_ID_HEADER.encode(), trace_id.encode())
+                    (REQUEST_ID_HEADER.encode(), request.state.trace_id.encode())
                 ]
             await send(message)
 
-        with log_context(trace_id=trace_id, request_id=trace_id):
-            await self.app(scope, receive, send_wrapper)
+        with tracer.span_from_traceparent(
+            request.headers.get("traceparent"),
+            name=f"{method} {request.url.path}",
+            attributes={
+                "http.method": method,
+                "http.url": str(request.url),
+                "http.target": request.url.path,
+            },
+        ):
+            # Tracing on: prefer the OTel trace id so every correlation surface
+            # (envelope, logs, AMQP headers) carries the same trace.
+            span_trace_id, _ = tracer.get_current_span_context()
+            if span_trace_id:
+                request.state.trace_id = span_trace_id
+            with log_context(trace_id=request.state.trace_id, request_id=request.state.trace_id):
+                await self.app(scope, receive, send_wrapper)

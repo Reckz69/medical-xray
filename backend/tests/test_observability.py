@@ -17,6 +17,15 @@ Phase 2 covers the enabled-mode Prometheus surface:
   them in Prometheus text format; reconfigure resets the registry.
 * Unknown instrument names stay no-ops even when enabled.
 * MetricsMiddleware records http_requests_total / http_request_duration_seconds.
+
+Phase 3 covers the enabled-mode tracing surface:
+
+* configure(enabled=True) with an injected InMemorySpanExporter records spans
+  with attributes; nested spans share a trace and parent-child links.
+* span_from_traceparent continues a remote trace (RabbitMQ -> worker).
+* get_current_traceparent produces a W3C traceparent for AMQP injection, and
+  build_message_headers embeds it alongside trace_id / correlation_id.
+* TraceIDMiddleware prefers the OTel span's trace id when tracing is on.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ import logging
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import gateway.core.observability.logging as logging_mod
 from gateway.core.observability.logging import (
@@ -38,6 +48,7 @@ from gateway.core.observability.logging import (
 from gateway.core.observability.metrics import NoopInstrument, metrics
 from gateway.core.observability.tracing import tracer
 from gateway.core.otel import TraceIDMiddleware
+from gateway.core.queue import build_message_headers
 from gateway.main import MetricsMiddleware
 
 #: Every instrument the facade may materialise (Phase 2 spec set).
@@ -239,6 +250,107 @@ async def test_metrics_middleware_records_http_request() -> None:
         assert b"http_request_duration_seconds_count" in body
     finally:
         metrics.configure(enabled=False)
+
+
+def test_tracer_records_spans_when_enabled() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        with tracer.span("storage.upload", attributes={"key": "k"}):
+            pass
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].name == "storage.upload"
+        assert spans[0].attributes.get("key") == "k"
+    finally:
+        tracer.configure(enabled=False)
+
+
+def test_tracer_nested_spans_share_trace_and_parent() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        with tracer.span("parent"), tracer.span("child"):
+            pass
+        spans = {s.name: s for s in exporter.get_finished_spans()}
+        assert set(spans) == {"parent", "child"}
+        assert spans["child"].context.trace_id == spans["parent"].context.trace_id
+        assert spans["child"].parent.span_id == spans["parent"].context.span_id
+    finally:
+        tracer.configure(enabled=False)
+
+
+def test_get_current_span_context_when_enabled() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        assert tracer.get_current_span_context() == (None, None)
+        with tracer.span("s"):
+            trace_id, span_id = tracer.get_current_span_context()
+            assert trace_id and span_id
+            assert len(trace_id) == 32 and len(span_id) == 16
+    finally:
+        tracer.configure(enabled=False)
+
+
+def test_span_from_traceparent_continues_remote_trace() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        with tracer.span("publish"):
+            traceparent = tracer.get_current_traceparent()
+        assert traceparent and traceparent.startswith("00-")
+        with tracer.span_from_traceparent(traceparent, name="consume"):
+            pass
+        spans = {s.name: s for s in exporter.get_finished_spans()}
+        assert spans["consume"].context.trace_id == spans["publish"].context.trace_id
+        assert spans["consume"].parent.span_id == spans["publish"].context.span_id
+    finally:
+        tracer.configure(enabled=False)
+
+
+def test_get_current_traceparent_is_none_when_disabled() -> None:
+    tracer.configure(enabled=False)
+    assert tracer.get_current_traceparent() is None
+    with tracer.span_from_traceparent(None, name="x"):
+        pass
+    assert tracer.get_current_span_context() == (None, None)
+
+
+def test_build_message_headers_injects_traceparent_when_active() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        with tracer.span("publish"):
+            headers = build_message_headers("trace-1", "corr-1")
+        assert headers["trace_id"] == "trace-1"
+        assert headers["correlation_id"] == "corr-1"
+        assert headers["traceparent"].startswith("00-")
+    finally:
+        tracer.configure(enabled=False)
+
+
+def test_build_message_headers_without_active_span() -> None:
+    tracer.configure(enabled=False)
+    headers = build_message_headers("trace-1", "corr-1")
+    assert headers == {"trace_id": "trace-1", "correlation_id": "corr-1"}
+
+
+async def test_middleware_prefers_otel_trace_id_when_tracing_on() -> None:
+    exporter = InMemorySpanExporter()
+    tracer.configure(enabled=True, exporter=exporter)
+    try:
+        transport = httpx.ASGITransport(app=TraceIDMiddleware(_echo_correlation_app))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.get("/ping")
+        assert resp.status_code == 200
+        span_trace_id = exporter.get_finished_spans()[0].context.trace_id
+        # The envelope trace_id matches the OTel span's trace id.
+        assert resp.json()["trace_id"] == format(span_trace_id, "032x")
+    finally:
+        tracer.configure(enabled=False)
 
 
 async def _echo_correlation_app(scope, receive, send) -> None:

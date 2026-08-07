@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     # observability component is a no-op; no collector/Jaeger is required.
     otel_enabled: bool = False
 
+    # OTel tracing exporter. "otlp-http" sends spans to otel_endpoint (the
+    # collector, or a trace backend directly); "console" prints spans to stdout
+    # for local debugging. The collector is the config-only abstraction for the
+    # trace backend (ADR-010) — swapping Tempo/Jaeger changes only this value.
+    otel_exporter: str = "otlp-http"
+    otel_endpoint: str = "http://collector:4318"
+
     # Prometheus metrics. When True the gateway serves /metrics on the app
     # port and the worker/scheduler run a metrics HTTP server on metrics_port.
     metrics_enabled: bool = False
