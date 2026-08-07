@@ -20,6 +20,7 @@ import hashlib
 import logging
 import os
 import socket
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePath
@@ -28,6 +29,7 @@ from uuid import UUID
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
+from gateway.core.observability import metrics
 from gateway.core.queue import EVT_SCAN_COMPLETED, EVT_SCAN_FAILED, queue
 from gateway.core.storage.factory import storage
 from gateway.models.job import (
@@ -84,34 +86,38 @@ async def process_message(
     """Run one inference.run command; the job ends COMPLETED, RETRYING, or FAILED."""
     scan_id = UUID(payload["scan_id"])
     job_id = UUID(payload["job_id"])
+    started = time.perf_counter()
     try:
-        async with SessionLocal() as session:
-            changed = await _run_job(session, payload)
-            await session.commit()
-    except Exception as exc:
-        logger.exception("job failed: scan=%s job=%s", scan_id, job_id)
-        retried = await _handle_failure(scan_id, job_id, exc)
-        if not retried:
+        try:
+            async with SessionLocal() as session:
+                changed = await _run_job(session, payload)
+                await session.commit()
+        except Exception as exc:
+            logger.exception("job failed: scan=%s job=%s", scan_id, job_id)
+            retried = await _handle_failure(scan_id, job_id, exc)
+            if not retried:
+                await _publish_event(
+                    EVT_SCAN_FAILED,
+                    scan_id=scan_id,
+                    job_id=job_id,
+                    payload=payload,
+                    error=exc,
+                    trace_id=trace_id,
+                    correlation_id=correlation_id,
+                )
+            return
+        if changed:
             await _publish_event(
-                EVT_SCAN_FAILED,
+                EVT_SCAN_COMPLETED,
                 scan_id=scan_id,
                 job_id=job_id,
                 payload=payload,
-                error=exc,
+                error=None,
                 trace_id=trace_id,
                 correlation_id=correlation_id,
             )
-        return
-    if changed:
-        await _publish_event(
-            EVT_SCAN_COMPLETED,
-            scan_id=scan_id,
-            job_id=job_id,
-            payload=payload,
-            error=None,
-            trace_id=trace_id,
-            correlation_id=correlation_id,
-        )
+    finally:
+        metrics.worker_job_duration_seconds.observe(time.perf_counter() - started)
 
 
 async def _run_job(session: AsyncSession, payload: dict[str, Any]) -> bool:
@@ -156,6 +162,8 @@ async def _run_job(session: AsyncSession, payload: dict[str, Any]) -> bool:
         scan_id,
         {k: round(v, 1) for k, v in result.timings.as_dict().items()},
     )
+    metrics.worker_inference_seconds.observe(result.timings.inference_ms / 1000)
+    metrics.worker_processing_seconds.observe(result.timings.total_ms / 1000)
 
     object_repo = ObjectRepository(session)
     output_repo = ScanOutputRepository(session)
@@ -243,6 +251,7 @@ async def _handle_failure(scan_id: UUID, job_id: UUID, exc: Exception) -> bool:
             return True
 
         await job_repo.mark_failed(job_id, error=error)
+        metrics.worker_job_failures_total.inc()
         await ScanRepository(session).set_failed(scan_id, routing_message=error)
         await session.commit()
         logger.error("job %s failed after %d attempts: %s", job_id, job.attempt, error)

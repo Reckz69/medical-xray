@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     # observability component is a no-op; no collector/Jaeger is required.
     otel_enabled: bool = False
 
+    # Prometheus metrics. When True the gateway serves /metrics on the app
+    # port and the worker/scheduler run a metrics HTTP server on metrics_port.
+    metrics_enabled: bool = False
+    metrics_port: int = 9101  # worker/scheduler scrape port
+
     # ── Upload validation ────────────────────────────────────────────────────
     max_upload_size_mb: int = 50
     min_image_dimension: int = 64

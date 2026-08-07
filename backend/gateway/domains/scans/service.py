@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import time
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -42,6 +43,7 @@ from gateway.core.errors import (
     ValidationError_,
 )
 from gateway.core.feature_flags import flags
+from gateway.core.observability import metrics
 from gateway.core.queue import CMD_INFERENCE_RUN, queue
 from gateway.core.storage.base import StorageProvider
 from gateway.models.audit import ACTION_DELETE, ACTION_DOWNLOAD, ACTION_UPLOAD
@@ -258,6 +260,7 @@ async def upload_scan(
         return {"scan": existing, "job": None, "duplicate": True}
 
     # 8. Upload original to object storage
+    persist_started = time.perf_counter()
     object_key = f"scans/{current_user.id}/{uuid4().hex}/{_safe_name(filename)}"
     stored = await storage.upload(
         object_key, data, content_type=mime_type, checksum=content_hash
@@ -324,6 +327,7 @@ async def upload_scan(
             return {"scan": existing, "job": None, "duplicate": True}
         raise
 
+    metrics.scan_upload_seconds.observe(time.perf_counter() - persist_started)
     await _publish_inference_run(job.payload, trace_id=trace_id)
 
     logger.info(

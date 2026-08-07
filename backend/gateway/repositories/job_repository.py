@@ -6,17 +6,17 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from gateway.models.job import (
     DEFAULT_MAX_ATTEMPTS,
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     JOB_STATUS_QUEUED,
     JOB_STATUS_RETRYING,
     JOB_STATUS_RUNNING,
-    JOB_STATUS_CANCELLED,
     Job,
 )
 from gateway.models.scan import Scan
@@ -275,3 +275,10 @@ class JobRepository(BaseRepository):
         job.finished_at = datetime.now(UTC)
         await self.session.flush()
         return job
+
+    async def count_by_status(self) -> dict[str, int]:
+        """Per-status job counts for the per-cycle `jobs_by_status` gauge."""
+        result = await self.session.execute(
+            select(Job.status, func.count()).group_by(Job.status)
+        )
+        return {status: count for status, count in result.all()}

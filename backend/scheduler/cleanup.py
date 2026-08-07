@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
+from gateway.core.observability import metrics as obs_metrics
 from gateway.core.redis import redis
 from gateway.core.storage.factory import storage
 from gateway.repositories.scan_repository import ScanRepository
@@ -79,6 +80,7 @@ async def _delete_objects(keys: list[str]) -> None:
         except Exception as exc:  # noqa: BLE001 — storage must not block DB cleanup
             metrics.last_error = f"object delete failed for {key}: {exc}"
             metrics.cleanup_failures += 1
+            obs_metrics.scheduler_cleanup_failures_total.inc()
             logger.warning("failed to delete object %s from storage: %s", key, exc)
 
 
@@ -129,6 +131,7 @@ class CleanupService:
                 await session.commit()
             duration = time.perf_counter() - started
             metrics.cleanup_duration_seconds = duration
+            obs_metrics.scheduler_cleanup_duration_seconds.set(duration)
             logger.info(
                 "cleanup run (source=%s) purged %d scan(s) in %.3fs",
                 source,
@@ -143,6 +146,7 @@ class CleanupService:
             }
         except Exception as exc:
             metrics.cleanup_failures += 1
+            obs_metrics.scheduler_cleanup_failures_total.inc()
             metrics.last_error = f"cleanup ({source}) failed: {exc}"
             logger.exception("cleanup run (source=%s) failed", source)
             return {
@@ -167,11 +171,13 @@ class CleanupService:
             )
         except Exception as exc:  # noqa: BLE001
             metrics.cleanup_failures += 1
+            obs_metrics.scheduler_cleanup_failures_total.inc()
             metrics.last_error = f"cleanup lock acquire failed: {exc}"
             logger.warning("cleanup lock acquire failed (run skipped): %s", exc)
             return None
         if not acquired:
             metrics.cleanup_skipped_runs += 1
+            obs_metrics.scheduler_cleanup_skipped_total.inc()
             logger.info("cleanup skipped: another run holds the lock")
             return False
         return True

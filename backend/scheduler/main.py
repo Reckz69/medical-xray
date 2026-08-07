@@ -27,6 +27,7 @@ from aio_pika import ExchangeType
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
 from gateway.core.observability import init_observability, log_context
+from gateway.core.observability import metrics as obs_metrics
 from gateway.core.queue import CMD_CLEANUP_RUN, COMMANDS_EXCHANGE, queue
 from gateway.core.redis import redis
 from scheduler import retry_jobs
@@ -96,7 +97,10 @@ async def main() -> None:
         service="scheduler",
         log_level="DEBUG" if settings.debug else "INFO",
         otel_enabled=settings.otel_enabled,
+        metrics_enabled=settings.metrics_enabled,
     )
+    if settings.metrics_enabled:
+        obs_metrics.start_server(settings.metrics_port)
     logger.info(
         "scheduler starting: poll=%ds cleanup=%ds stall=%ds lock_ttl=%ds",
         settings.scheduler_poll_interval_seconds,

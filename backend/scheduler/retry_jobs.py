@@ -25,10 +25,19 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.core.config import settings
+from gateway.core.observability import metrics as obs_metrics
 from gateway.core.queue import (
     CMD_INFERENCE_RUN,
     EVT_SCAN_FAILED,
     queue,
+)
+from gateway.models.job import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RETRYING,
+    JOB_STATUS_RUNNING,
 )
 from gateway.repositories.job_repository import JobRepository
 from gateway.repositories.scan_repository import ScanRepository
@@ -37,6 +46,17 @@ from scheduler.metrics import metrics
 logger = logging.getLogger("denoise.scheduler")
 
 _MAX_ERROR = 2000
+
+#: Every job status, used to zero the per-cycle gauge so a status that has no
+#: jobs this cycle does not keep a stale value.
+_JOB_STATUSES = (
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_RETRYING,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_CANCELLED,
+)
 
 
 def backoff_seconds(attempt: int) -> int:
@@ -69,6 +89,7 @@ async def _republish(
         return
     await repo.confirm_republished(job.id)
     metrics.jobs_republished += 1
+    obs_metrics.scheduler_jobs_republished_total.inc()
 
 
 async def republish_retries(session: AsyncSession, *, now: datetime | None = None) -> int:
@@ -162,6 +183,13 @@ async def run_once(session: AsyncSession, *, now: datetime | None = None) -> dic
     republished = await republish_retries(session, now=now)
     recovered = await recover_stalled(session, now=now)
     unconfirmed = await recover_unconfirmed(session, now=now)
+
+    counts = await JobRepository(session).count_by_status()
+    for status in _JOB_STATUSES:
+        obs_metrics.jobs_by_status.labels(status=status).set(0)
+    for status, count in counts.items():
+        obs_metrics.jobs_by_status.labels(status=status).set(count)
+
     return {
         "jobs_republished": republished,
         "jobs_recovered": recovered,
