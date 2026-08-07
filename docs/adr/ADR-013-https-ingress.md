@@ -2,8 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-08
-- **Deciders:** Architecture review (Sprint 4D)
-- **Related:** [ADR-012](ADR-012-deployment-architecture.md), [ADR-014](ADR-014-secrets-management.md), `deploy/production/Caddyfile`
+- **Deciders:** Architecture review (Sprint 4D; `s3.` edge added in Sprint 4E)
+- **Related:** [ADR-012](ADR-012-deployment-architecture.md), [ADR-014](ADR-014-secrets-management.md), [ADR-018](ADR-018-runtime-configuration.md), `deploy/production/Caddyfile`, `deploy/production/Caddyfile.local`
 
 ## Context
 
@@ -24,6 +24,8 @@ Caddy is the single ingress on the VM:
 
 - It listens on `:443` and `:80` and reverse-proxies:
   - `api.<domain>` → `gateway:8000`
+  - `s3.<domain>` → `minio:9000` (Sprint 4E: serves presigned download URLs,
+    ADR-003/ADR-018 — served verbatim, no `encode`)
   - `<domain>` (and `www.<domain>`) → the frontend container (or Vercel, per
     ADR-016)
 - It terminates TLS; every upstream sees only plain HTTP on the internal

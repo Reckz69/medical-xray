@@ -3,16 +3,18 @@
 #   docker compose -f docker-compose.yml -f observability.yml up -d
 #
 # Merges with the production docker-compose.yml to add the OTel Collector
-# (traces), Prometheus (metrics), and Grafana (dashboards), and to switch the
-# gateway/worker/scheduler onto OTel tracing + Prometheus scraping. The core
-# production stack runs fine without this file — observability stays a
-# removable overlay (docs/AI_ENGINEERING_GUIDE.md: the app stack must never
-# depend on optional observability infrastructure).
+# (traces), Jaeger (trace visualization), Prometheus (metrics), and Grafana
+# (dashboards), and to switch the gateway/worker/scheduler onto OTel tracing +
+# Prometheus scraping. The core production stack runs fine without this file —
+# observability stays a removable overlay (docs/AI_ENGINEERING_GUIDE.md: the
+# app stack must never depend on optional observability infrastructure).
 #
-# Endpoints (internal only in production — reach them via an SSH tunnel):
-#   OTLP/HTTP (traces) : http://otel-collector:4318
-#   Prometheus         : http://prometheus:9090
-#   Grafana            : http://grafana:3000
+# Endpoints (internal only in production — reach them via an SSH tunnel or,
+# where bound to 127.0.0.1, directly on the host):
+#   OTLP/HTTP (traces) : http://otel-collector:4318   (internal)
+#   Jaeger UI          : http://127.0.0.1:16686       (host loopback)
+#   Prometheus         : http://prometheus:9090       (internal)
+#   Grafana            : http://grafana:3000          (internal)
 #
 # The scrape config at backend/infrastructure/prometheus/prometheus.yml uses
 # service DNS names (gateway:8000, worker:9101, scheduler:9101), which match
@@ -23,6 +25,14 @@ services:
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ../../backend/infrastructure/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    restart: unless-stopped
+
+  jaeger:
+    # Jaeger v2 all-in-one (OTel-Collector-native; Jaeger v1 is EOL).
+    # UI bound to host loopback only — never exposed through Caddy (ADR-013).
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "127.0.0.1:16686:16686"
     restart: unless-stopped
 
   prometheus:

@@ -2,24 +2,20 @@
 #
 # App nodes send traces over OTLP/HTTP (:4318) — their OTEL_ENDPOINT is
 # http://otel-collector:4318 — and the collector batches then exports them to
-# the `debug` exporter (stdout), so a full end-to-end path is visible in:
+# Jaeger (Sprint 4E) AND to the `debug` exporter (stdout), so the full path is
+# visible in Jaeger's UI and in:
 #
-#   docker compose -f deploy/docker-compose.yml -f deploy/observability.yml \
+#   docker compose -f docker-compose.yml -f observability.yml \
 #     logs -f otel-collector
 #
 # The collector is the config-only abstraction for the trace backend
 # (ADR-010): swapping the backend is a config change only, zero app change.
-# For example, to forward to Grafana Tempo instead of the debug exporter:
+# For example, to stop exporting to Jaeger and keep only stdout:
 #
-#   exporters:
-#     otlp/tempo:
-#       endpoint: http://tempo:4318
-#       tls:
-#         insecure: true
 #   service:
 #     pipelines:
 #       traces:
-#         exporters: [otlp/tempo]
+#         exporters: [debug]
 receivers:
   otlp:
     protocols:
@@ -32,10 +28,15 @@ processors:
 exporters:
   debug:
     verbosity: basic
+  otlp_http/jaeger:
+    # Jaeger v2 (jaegertracing/jaeger) all-in-one OTLP/HTTP receiver on :4318.
+    # otlphttp is OTLP-over-HTTP/1.1; the plain `otlp` exporter defaults to
+    # gRPC, which would target Jaeger's gRPC receiver instead (mismatch).
+    endpoint: http://jaeger:4318
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlp_http/jaeger]

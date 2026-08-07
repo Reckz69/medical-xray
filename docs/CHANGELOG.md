@@ -6,6 +6,72 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4E — Production readiness (runtime configuration)
+
+**Added**
+- Runtime configuration (ADR-018): one compose stack for every environment —
+  `.env` selects local vs cloud via `SITE_DOMAIN`, `CADDYFILE`, `COMPOSE_PROFILES`,
+  `CORS_ORIGINS`, `S3_PUBLIC_ENDPOINT`, `MODEL_WEIGHTS_PATH`. No LOCAL/CLOUD
+  branches in code.
+- `S3_PUBLIC_ENDPOINT` runtime knob (ADR-003/ADR-018): presigned download URLs
+  are issued against the browser-reachable `s3.<SITE_DOMAIN>` Caddy edge
+  (`s3.*` → `minio:9000`, no gzip) instead of the internal endpoint; MinIO SDK
+  path-style restriction documented (subdomain required). Empty → internal
+  presign (tooling only).
+- `Caddyfile.local` (Sprint 4E local mode): Caddy internal CA (`local_certs`),
+  same `api.`/`s3.`/root site topology as the cloud `Caddyfile`.
+- Containerized frontend (ADR-018 profile): `frontend/Dockerfile`
+  (`output: "standalone"`, non-root `nextjs` runner) + `.dockerignore`;
+  `COMPOSE_PROFILES=frontend` includes it, Caddy proxies `<SITE_DOMAIN>` →
+  `FRONTEND_UPSTREAM`. Same standalone build runs on Vercel in cloud mode.
+- Jaeger observability (ADR-010 overlay): `jaeger` v2 (2.20.0) service with a
+  loopback-bound UI in `deploy/production/observability.yml` +
+  `backend/deploy/observability.yml`; collector dual-exports
+  `[debug, otlp_http/jaeger]` (gRPC `otlp/jaeger` mismatched Jaeger's HTTP
+  receiver). Verified: cross-service trace gateway → worker → pipeline.
+- ADR-018 `docs/adr/ADR-018-runtime-configuration.md`; `docs/README.md` ADR log
+  and index updated.
+
+**Changed**
+- `deploy/production/.env.example`: Sprint 4E runtime-config blocks (LOCAL vs
+  CLOUD), `S3_PUBLIC_ENDPOINT`, lowercase registry (`ghcr.io/reckz69`),
+  compose-relative weights default `../../n2n_unet_best_weights04.keras`.
+- `docker-compose.yml`: `S3_PUBLIC_ENDPOINT` gateway env, frontend profile
+  service + healthcheck (IPv4 `127.0.0.1` — busybox wget resolves `localhost`
+  → `::1`, Next standalone binds IPv4), both Caddyfiles gain the `s3.` site.
+- `backend/gateway/core/config.py` + `storage/minio_provider.py`:
+  `s3_public_endpoint` setting and dedicated presign client bound to it.
+- `.github/workflows/ci-images.yml` + ADR-016: owner lowercased
+  (`${{ lower(github.repository_owner) }}`) — Docker refs are lowercase-only;
+  GHCR normalizes case so behavior is unchanged.
+- `docs/engineering/deployment.md`: runtime-configuration section, `s3.` edge
+  + frontend in topology/sequence, provisioning covers both modes + `s3.` DNS.
+- `docs/engineering/backup-restore.md`: RabbitMQ export/import now passes
+  explicit `-u/-p` (default user is `denoise`, not guest/guest — plain
+  `rabbitmqadmin export` gets `Access refused`); MinIO backup/restore passes
+  `.env` values explicitly; restore verification includes presigned download
+  via the `s3.` edge (proven 2026-08-08).
+- `docs/engineering/ci.md`: lowercase owner normalization note.
+- `docs/engineering/production-checklist.md`: `s3.` DNS + presigned-download
+  boxes, Jaeger trace verification, 4E restore-tested evidence.
+
+**Proven on the live local deployment (Phase 2 gate, 2026-08-08)**
+- HTTPS E2E: frontend 200, `health/ready` all-ok, PATH A inference COMPLETED,
+  presigned downloads 200 with checksums matching the API.
+- Backup: Postgres `pg_dump -Fc`; MinIO `mc mirror` (16 objects); RabbitMQ
+  definitions export.
+- Restore: Postgres wipe → `pg_restore --clean --if-exists` (counts exact);
+  MinIO delete → mirror-back (byte-for-byte); RabbitMQ import (queue/exchanges/
+  binding/user restored).
+- `docker compose down` → `up`: named volumes persisted, all data intact,
+  full stack healthy.
+
+**Known gaps (recorded, not fixed — see production-checklist)**
+- SR-3 hardening: compose images still run as root with unpinned deps; k8s
+  reference manifests still carry uppercase `ghcr.io/Reckz69` image refs
+  (harmless to GHCR but inconsistent with ADR-016).
+- WAL/PITR for Postgres documented as follow-on; nightly logical dumps only.
+
 ### Sprint 4D — Production readiness
 
 **Added**

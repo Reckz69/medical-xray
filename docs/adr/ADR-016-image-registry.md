@@ -25,15 +25,18 @@ story in one place, and the built-in `GITHUB_TOKEN` can push images with
 A dedicated workflow (`ci-images.yml`) builds the three backend images and
 pushes them to GHCR:
 
-- `ghcr.io/Reckz69/gateway`
-- `ghcr.io/Reckz69/worker`
-- `ghcr.io/Reckz69/scheduler`
+- `ghcr.io/reckz69/gateway`
+- `ghcr.io/reckz69/worker`
+- `ghcr.io/reckz69/scheduler`
 
-`Reckz69` is a **user** namespace: GitHub only allows the
+`reckz69` is a **user** namespace: GitHub only allows the
 `OWNER/REPO/IMAGE` nesting for organizations, so the images are
 `ghcr.io/USER/<image>`, not nested under the repository name. The workflow
 derives the owner from `github.repository_owner`, so the path stays correct if
-the repository ever moves under an org.
+the repository ever moves under an org. The owner is **lowercased** in the
+reference: Docker requires lowercase repository names (GHCR itself is
+case-insensitive, so `ghcr.io/reckz69/*` resolves the same image as the
+`Reckz69` owner). Sprint 4E corrected the reference to the lowercase form.
 
 The three images map directly to the existing Dockerfiles
 (`backend/{gateway,worker,scheduler}/Dockerfile`). The frontend is **not**

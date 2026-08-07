@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # ── Object storage ───────────────────────────────────────────────────────
     storage_provider: str = "minio"  # minio | s3 | azure | r2
     s3_endpoint: str = "http://localhost:9000"
+    # Public endpoint used to build presigned download URLs (Sprint 4E). The
+    # app talks to s3_endpoint over the compose network; browsers cannot reach
+    # that internal hostname, so presigned URLs are generated against a public
+    # host (e.g. https://s3.localhost locally, https://s3.<SITE_DOMAIN> in the
+    # cloud) that routes to the same bucket via the Caddy edge (ADR-013).
+    # Empty → presign against s3_endpoint (internal/tooling behavior).
+    s3_public_endpoint: str = ""
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
     s3_bucket: str = "denoise-xray"

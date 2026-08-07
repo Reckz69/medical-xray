@@ -22,6 +22,10 @@ def _endpoint_from_url(url: str) -> str:
     return url.replace("https://", "").replace("http://", "").rstrip("/")
 
 
+def _secure_from_url(url: str) -> bool:
+    return url.startswith("https://")
+
+
 class MinioStorageProvider(StorageProvider):
     def __init__(self, settings: Settings) -> None:
         self._client = Minio(
@@ -31,6 +35,20 @@ class MinioStorageProvider(StorageProvider):
             secure=settings.s3_use_ssl,
             region=settings.s3_region,
         )
+        # Presigning uses a separate client bound to the public endpoint when
+        # configured (Sprint 4E, runtime configuration): browsers download via
+        # the Caddy edge, not the internal hostname. Falls back to the internal
+        # client when S3_PUBLIC_ENDPOINT is empty (tooling / dev behavior).
+        if settings.s3_public_endpoint:
+            self._presign_client = Minio(
+                _endpoint_from_url(settings.s3_public_endpoint),
+                access_key=settings.s3_access_key,
+                secret_key=settings.s3_secret_key,
+                secure=_secure_from_url(settings.s3_public_endpoint),
+                region=settings.s3_region,
+            )
+        else:
+            self._presign_client = self._client
         self.bucket = settings.s3_bucket
         self._presign_expires = settings.storage_presign_expires_seconds
 
@@ -84,7 +102,7 @@ class MinioStorageProvider(StorageProvider):
     async def presign_get(self, key: str, expires_seconds: int | None = None) -> str:
         expires = datetime.timedelta(seconds=expires_seconds or self._presign_expires)
         return await asyncio.to_thread(
-            self._client.presigned_get_object,
+            self._presign_client.presigned_get_object,
             self.bucket,
             key,
             expires=expires,

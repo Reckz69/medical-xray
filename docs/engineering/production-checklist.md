@@ -7,11 +7,14 @@
 
 ## 1. Edge & TLS (ADR-013)
 
-- [ ] DNS: `api.<SITE_DOMAIN>` A record → VM public IP (before first Caddy boot).
+- [ ] DNS: `api.<SITE_DOMAIN>` and `s3.<SITE_DOMAIN>` A records → VM public IP
+      (before first Caddy boot; `s3.` feeds presigned download URLs, ADR-003/018).
 - [ ] `ACME_EMAIL` set; a valid cert is issued (no HTTP-only access remaining).
 - [ ] Only `:80`/`:443` open on the host firewall; every other port closed.
 - [ ] `CORS_ORIGINS` in `.env` lists the real frontend origin(s).
 - [ ] `wget -q --spider https://api.<SITE_DOMAIN>/health/ready` → 200.
+- [ ] A presigned download URL is issued with host `https://s3.<SITE_DOMAIN>`
+      and returns 200 through the edge (ADR-003/ADR-018).
 
 ## 2. Secrets & identity (ADR-014, SR-1)
 
@@ -45,6 +48,10 @@
 - [ ] Nightly backups scheduled (Postgres `pg_dump`, MinIO `mc mirror`,
       RabbitMQ definitions) **and copied off-site** (backup-restore.md).
 - [ ] **Restore tested** at least once (quarterly); RPO ≤ 24 h / RTO ≤ 4 h met.
+      **Proven in Sprint 4E** on the local deployment (2026-08-08): Postgres
+      wipe→restore (counts exact), MinIO delete→mirror-back (objects
+      byte-for-byte), RabbitMQ export→import, `docker compose down`→`up`
+      persistence — all green.
 - [ ] Object lifecycle wired: `OBJECT_ARCHIVE_DAYS` / `OBJECT_DELETE_DAYS`
       match the MinIO ILM or S3 lifecycle rules (backup-restore.md).
 - [ ] PostgreSQL WAL archiving decision recorded (follow-on for PITR).
@@ -56,7 +63,10 @@
 - [ ] Prometheus scrapes gateway/worker/scheduler (`/metrics`); Grafana has at
       least one dashboard + an alert on: gateway down, worker queue growth,
       disk > 85%, backup failure.
-- [ ] OTel traces visible (collector export target set — currently `debug`).
+- [ ] OTel traces visible in Jaeger (Sprint 4E: `otel-collector` dual-exports
+      `[debug, otlp_http/jaeger]`; UI loopback-bound, e.g. SSH tunnel
+      `127.0.0.1:16686`). Verify a cross-service trace: gateway POST
+      `/api/v1/scans` → worker inference → pipeline stages.
 
 ## 7. Operational practice
 
@@ -74,4 +84,4 @@
 | SR-2 (upload validation) | Implemented (magic bytes, size/dimension caps, checksum). |
 | SR-3 (non-root, read-only, pinned deps) | **Gap — scheduled hardening.** |
 | SR-4 (download audit, ownership, soft-delete) | Not yet a sprint (Sprint 5 security phase). |
-| SR-5 (SAST/SCA in CI) | **Gap — scheduled (4E or security sprint).** |
+| SR-5 (SAST/SCA in CI) | **Gap — scheduled (security sprint).** |

@@ -37,6 +37,7 @@ Postgres dump via a one-shot container on the compose network:
 
 ```sh
 cd deploy/production
+mkdir -p /var/backups/denoise
 docker compose exec -T postgres \
   pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc \
   | gzip > "/var/backups/denoise/$(date +%F).sql.gz"
@@ -49,9 +50,11 @@ Set `BACKUP_ACCESS_KEY` / `BACKUP_SECRET_KEY` in `.env` (or export them) to the
 
 ```sh
 cd deploy/production
+set -a && . ./.env && set +a   # load the .env values into the shell
 docker compose run --rm --no-deps \
-  -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -e S3_BUCKET \
-  -e BACKUP_ACCESS_KEY -e BACKUP_SECRET_KEY \
+  -e "MINIO_ROOT_USER=$MINIO_ROOT_USER" -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" \
+  -e "S3_BUCKET=$S3_BUCKET" \
+  -e "BACKUP_ACCESS_KEY=$BACKUP_ACCESS_KEY" -e "BACKUP_SECRET_KEY=$BACKUP_SECRET_KEY" \
   minio-init sh -c '
     mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
     mc alias set backup https://s3.example.com "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY"
@@ -59,10 +62,15 @@ docker compose run --rm --no-deps \
   '
 ```
 
-RabbitMQ definitions:
+RabbitMQ definitions — the default user is `denoise` (from `.env`), not
+`guest`/`guest`, so pass credentials explicitly:
 
 ```sh
-docker compose exec rabbitmq rabbitmqadmin export /tmp/definitions.json
+cd deploy/production
+set -a && . ./.env && set +a
+docker compose exec rabbitmq \
+  rabbitmqadmin -u "$RABBITMQ_USER" -p "$RABBITMQ_PASS" export /tmp/definitions.json
+docker cp production-rabbitmq-1:/tmp/definitions.json /var/backups/denoise/definitions.json
 ```
 
 Schedule all three as a systemd timer / cron (`@daily`), then **copy the
@@ -81,19 +89,45 @@ deleted (scheduler cleanup purges DB rows; lifecycle rules cover the objects):
 
 ## Restore runbook (target ≤ 4 h)
 
+> **Proven in Sprint 4E:** this runbook (Postgres restore, MinIO mirror-back,
+> RabbitMQ import, down/up persistence) was executed against the live local
+> deployment in 2026-08-08 — counts restored exactly, MinIO objects byte-for-byte.
+
 1. **Provision/repair the VM** and bring up `postgres`, `redis`, `rabbitmq`,
    `minio` from `deploy/production/docker-compose.yml` (infra-only is fine).
-2. **Postgres:** drop and recreate the schema, then load the nightly dump:
+2. **Postgres:** drop and recreate the schema, then load the nightly dump
+   (pipe the host-side backup file into the container — same direction as the
+   backup command; the container has no `/var/backups` mount):
    ```sh
-   docker compose exec -T postgres \
-     sh -c 'gunzip -c /var/backups/denoise/YYYY-MM-DD.sql.gz \
-       | pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists'
+   cd deploy/production
+   set -a && . ./.env && set +a
+   gunzip -c /var/backups/denoise/YYYY-MM-DD.sql.gz \
+     | docker compose exec -T postgres \
+         pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists
    ```
-3. **RabbitMQ:** `rabbitmqadmin import` the definitions export; queued work is
-   re-published by clients/retry on the next cycle.
+3. **RabbitMQ:** import the definitions export with explicit credentials
+   (guest/guest is not the default user here):
+   ```sh
+   docker cp /var/backups/denoise/definitions.json production-rabbitmq-1:/tmp/definitions.json
+   docker compose exec rabbitmq \
+     rabbitmqadmin -u "$RABBITMQ_USER" -p "$RABBITMQ_PASS" import /tmp/definitions.json
+   ```
+   Queued work is re-published by clients/retry on the next cycle.
 4. **MinIO/S3:** `mc mirror` back from the backup location (or rely on bucket
    replication for the managed path). The app's `STORAGE_PROVIDER` seam
-   (ADR-015) means the object layer can be restored to S3 even if it was MinIO.
+   (ADR-015) means the object layer can be restored to S3 even if it was MinIO:
+   ```sh
+   docker compose run --rm --no-deps \
+     -e "MINIO_ROOT_USER=$MINIO_ROOT_USER" -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" \
+     -e "S3_BUCKET=$S3_BUCKET" \
+     -e "BACKUP_ACCESS_KEY=$BACKUP_ACCESS_KEY" -e "BACKUP_SECRET_KEY=$BACKUP_SECRET_KEY" \
+     -v /var/backups/denoise/minio:/backup \
+     minio-init sh -c '
+       mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+       mc alias set backup https://s3.example.com "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY"
+       mc mirror --overwrite backup/$S3_BUCKET local/$S3_BUCKET
+     '
+   ```
 5. **Redis:** empty is acceptable (counters reset, locks expire); restore the
    RDB only if desired.
 6. **Bring the app up** and verify:
@@ -101,8 +135,14 @@ deleted (scheduler cleanup purges DB rows; lifecycle rules cover the objects):
    docker compose up -d
    curl -sf https://api.<SITE_DOMAIN>/health/ready
    ```
-7. **Test the restore** quarterly — a backup that has never been restored is
-   a guess.
+7. **Verify the restore** — a backup that has never been restored is a guess:
+   - Row counts match the backup (`users`, `scans`, `jobs`, `objects`).
+   - A presigned download works through the public edge
+     (`s3.<SITE_DOMAIN>` → MinIO, ADR-003/ADR-018): `GET
+     /api/v1/scans/{id}/outputs/ENHANCED/url` returns a `download_url` whose
+     host is `https://s3.<SITE_DOMAIN>`, and `curl -k "$download_url"` returns
+     HTTP 200 with the expected PNG (local mode is self-signed — use `-k`).
+8. **Test the restore** quarterly.
 
 ## Notes & limits
 

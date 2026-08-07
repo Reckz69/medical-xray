@@ -17,7 +17,7 @@ evolves.
 | Database | [`database/er.md`](database/er.md) | PostgreSQL ER diagram (9 tables) |
 | Security | [`security/threat-model.md`](security/threat-model.md) | STRIDE threat model |
 | Engineering | [`engineering/ci.md`](engineering/ci.md) | CI/CD workflows, image publishing, weights release, local equivalents |
-| Engineering | [`engineering/deployment.md`](engineering/deployment.md) | Production deployment (Compose on VM), HTTPS/ingress |
+| Engineering | [`engineering/deployment.md`](engineering/deployment.md) | Production deployment (Compose on VM), HTTPS/ingress, runtime config |
 | Engineering | [`engineering/scaling.md`](engineering/scaling.md) | Scaling design (single-VM now, K8s reference) |
 | Engineering | [`engineering/backup-restore.md`](engineering/backup-restore.md) | RPO/RTO, nightly backups, off-site copy, restore runbook |
 | Engineering | [`engineering/secret-rotation.md`](engineering/secret-rotation.md) | Manual rotation runbooks for JWT/Postgres/RabbitMQ/MinIO/Grafana/GHCR |
@@ -45,6 +45,7 @@ evolves.
 | [ADR-015](adr/ADR-015-persistent-state.md) | Self-hosted Postgres/Redis/RabbitMQ/MinIO; managed documented alt | Accepted |
 | [ADR-016](adr/ADR-016-image-registry.md) | GHCR image registry (reverses ADR-011 deferral) | Accepted |
 | [ADR-017](adr/ADR-017-versioning-release.md) | Semver + sprint tags + image tags + weights/schema compatibility matrix | Accepted |
+| [ADR-018](adr/ADR-018-runtime-configuration.md) | Runtime configuration: one compose stack, `.env` selects local vs cloud | Accepted |
 
 ## Conventions that apply to all artifacts
 

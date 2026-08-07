@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Denoise X — generate production secrets (Sprint 4D, ADR-014).
+# Denoise X — generate production secrets (Sprint 4E, ADR-014).
 #
 #   ./generate-secrets.sh
 #
@@ -61,6 +61,6 @@ Generated $DST with unique credentials (chmod 600). SAVE THESE ONCE:
   JWT_SECRET             = ${JWT_SECRET}
   GRAFANA_ADMIN_PASSWORD = ${GRAFANA_ADMIN_PASSWORD}
 
-Before starting the stack, set SITE_DOMAIN and ACME_EMAIL (and CORS_ORIGINS)
-in $DST. Then: docker compose up -d
+Before starting the stack, pick LOCAL or CLOUD in the runtime-configuration
+section of $DST (see .env.example). Then: docker compose up -d
 EOF

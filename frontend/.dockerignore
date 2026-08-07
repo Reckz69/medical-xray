@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+build
+playwright-report
+test-results
+e2e
+next-env.d.ts
+*.tsbuildinfo
+.env*
+npm-debug.log*
+README.md
+Dockerfile
+.dockerignore

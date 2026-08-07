@@ -15,7 +15,9 @@
 #   ghcr.io/<owner>/<service>:sprint-<tag>     on sprint-* tags (sprint boundary)
 #
 # The owner is `github.repository_owner`: for a user account GHCR only allows
-# `ghcr.io/USER/<image>` (no OWNER/REPO nesting) — see ADR-016.
+# `ghcr.io/USER/<image>` (no OWNER/REPO nesting) — see ADR-016. Docker image
+# references must be lowercase, so the owner is lowercased explicitly (GHCR
+# itself is case-insensitive).
 #
 # Docs: docs/engineering/ci.md
 name: CI (images)
@@ -46,7 +48,7 @@ jobs:
       matrix:
         service: [gateway, worker, scheduler]
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+      IMAGE: ghcr.io/${{ lower(github.repository_owner) }}/${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
 

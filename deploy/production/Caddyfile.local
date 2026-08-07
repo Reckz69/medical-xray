@@ -1,0 +1,36 @@
+# Denoise X — Caddy edge config, LOCAL mode (Sprint 4E, ADR-013).
+#
+# Runtime configuration (docs/engineering/deployment.md):
+#   SITE_DOMAIN=localhost
+#   CADDYFILE=Caddyfile.local
+#   COMPOSE_PROFILES=frontend
+#
+# `local_certs` forces Caddy's internal CA for every site — no ACME, no DNS,
+# no Let's Encrypt account. Certs are self-signed; browsers need a one-time
+# trust step. The topology is identical to the cloud `Caddyfile`: only this
+# edge is exposed, internal services stay plain HTTP on the compose network.
+#
+#   api.localhost  → gateway:8000
+#   s3.localhost    → minio:9000   (presigned download URLs, ADR-003)
+#   localhost      → frontend:3000   (active when the frontend profile is on)
+
+{
+	local_certs
+	email off
+}
+
+api.{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy gateway:8000
+}
+
+s3.{$SITE_DOMAIN} {
+	# No `encode` here: S3 objects are served verbatim (ADR-003 presigned
+	# downloads must not be re-compressed by the edge).
+	reverse_proxy minio:9000
+}
+
+{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy {$FRONTEND_UPSTREAM}
+}

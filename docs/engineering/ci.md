@@ -81,8 +81,11 @@ without storing a PAT or a service-account secret. A production host that runs
 Production consumes them in the "CI-produced artifacts" mode
 (`docker compose pull`, `deploy/production/`); the "dev / first deployment"
 mode builds from source and needs no registry. The owner is
-`github.repository_owner` — for a user account GHCR only allows
-`ghcr.io/USER/<image>` (no `OWNER/REPO` nesting), see ADR-016.
+`github.repository_owner`, **lowercased** (`${{ lower(github.repository_owner) }}`)
+— Docker image references are lowercase-only, so the workflow lowercases the
+owner and `.env`/compose use `ghcr.io/reckz69` (GHCR normalizes case, so
+`ghcr.io/Reckz69/...` and `ghcr.io/reckz69/...` are the same artifact) — see
+ADR-016.
 
 ## Weights release process (ADR-011)
 

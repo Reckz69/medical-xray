@@ -1,16 +1,18 @@
-# Denoise X — observability overlay (Sprint 4B, Phase 4).
+# Denoise X — observability overlay (Sprint 4B, Phase 4; + Jaeger in 4E).
 #
 #   docker compose -f deploy/docker-compose.yml -f deploy/observability.yml up -d --build
 #
 # Merges with docker-compose.yml to add the observability stack — an OTel
-# Collector (traces), Prometheus (metrics scrape), and Grafana (dashboards) —
-# and to switch the gateway/worker/scheduler onto OTel tracing + Prometheus
-# scraping. The core stack runs fine without this file (observability stays a
-# removable overlay; see docs/AI_ENGINEERING_GUIDE.md — "the app stack must
-# never depend on optional observability infrastructure").
+# Collector (traces), Jaeger (trace visualization), Prometheus (metrics
+# scrape), and Grafana (dashboards) — and to switch the gateway/worker/
+# scheduler onto OTel tracing + Prometheus scraping. The core stack runs fine
+# without this file (observability stays a removable overlay; see
+# docs/AI_ENGINEERING_GUIDE.md — "the app stack must never depend on optional
+# observability infrastructure").
 #
 # Endpoints:
 #   OTLP/HTTP (traces) : http://localhost:4318
+#   Jaeger UI          : http://localhost:16686
 #   Prometheus         : http://localhost:9090
 #   Grafana            : http://localhost:3001  (admin / GRAFANA_ADMIN_PASSWORD)
 #   Worker/Scheduler   : Prometheus metrics on :9101 inside each container
@@ -23,6 +25,13 @@ services:
       - ../infrastructure/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
     ports:
       - "4318:4318" # OTLP/HTTP — app nodes' OTEL_ENDPOINT
+    restart: unless-stopped
+
+  jaeger:
+    # Jaeger v2 all-in-one (OTel-Collector-native; Jaeger v1 is EOL).
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "127.0.0.1:16686:16686"
     restart: unless-stopped
 
   prometheus:
