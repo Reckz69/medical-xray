@@ -25,6 +25,7 @@ import io
 import json
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -36,6 +37,7 @@ from aio_pika import ExchangeType
 from httpx import AsyncClient
 from minio.error import S3Error
 from PIL import Image
+from sqlalchemy import text
 
 from gateway.core.config import settings
 from gateway.core.db import SessionLocal
@@ -167,6 +169,28 @@ async def failed_events_reader() -> Any:
     reader = await _bind_reader(EVENTS_EXCHANGE, EVT_SCAN_FAILED)
     yield reader
     await reader.close()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_jobs_between_tests() -> AsyncGenerator[None, None]:
+    """Isolate retry tests from shared-DB residue (scheduler flake root cause).
+
+    ``republish_retries``/``recover_stalled`` count *every* due ``RETRYING``
+    row in the shared persistent ``jobs`` table, and six tests assert those
+    global counts (``count == 1`` / ``count == 0``). Rows left behind by
+    earlier runs (e.g. ``next_retry_at`` in the future becoming due later)
+    inflate the counts, so the suite is order- and history-dependent. A
+    ``DELETE FROM jobs`` before each test makes the counts deterministic.
+
+    ``jobs`` is a leaf table (its only FK is ``scan_id → scans``), so deleting
+    rows can never orphan a parent. Transaction-rollback isolation is not
+    practical here: both the scheduler under test and the tests commit
+    internally via ``SessionLocal`` against the shared DB.
+    """
+    async with SessionLocal() as session:
+        await session.execute(text("DELETE FROM jobs"))
+        await session.commit()
+    yield
 
 
 async def _uploaded_job(client: AsyncClient) -> tuple[str, str, str]:
