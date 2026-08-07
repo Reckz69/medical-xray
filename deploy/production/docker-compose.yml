@@ -1,0 +1,249 @@
+# Denoise X — production deployment (Sprint 4D, ADR-012).
+#
+# Canonical topology: Docker Compose on a single Linux VM (ADR-012). HTTPS
+# terminates at Caddy (ADR-013). Secrets come from the local `.env` / compose
+# `secrets` — no default credentials ship in this file, so a missing or empty
+# secret fails loudly at `docker compose config` time (${VAR:?}, ADR-014).
+# State lives on named volumes (ADR-015). Images come from GHCR (`docker
+# compose pull`) or are built from source (`docker compose build`) — both
+# `image:` and `build:` are present, per ADR-016/ADR-012.
+#
+# Run from THIS directory so the local `.env` is loaded:
+#   cd deploy/production
+#   ./generate-secrets.sh             # first time only (ADR-014)
+#   docker compose up -d              # dev / first deployment (builds source)
+#   docker compose pull && docker compose up -d   # CI-produced artifacts
+#
+# Upgrade/rollback and the full runbook: docs/engineering/deployment.md.
+#
+# SR-3 note (threat model): the app images currently run as root with unpinned
+# pip deps. Non-root + read-only-root + pinned-deps hardening is REQUIRED
+# before production traffic — see docs/engineering/production-checklist.md.
+# The compose `user:`/`read_only:` wiring is deliberately not enabled here
+# until the images support it (TensorFlow needs a writable cache dir).
+services:
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-frontend:3000}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - gateway
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?set RABBITMQ_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  minio:
+    # Pin MINIO_IMAGE to a specific RELEASE tag in production; do not ship `latest`.
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-minio/mc:latest}
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      mc mb --ignore-existing local/${S3_BUCKET:-denoise-xray};
+      mc anonymous set none local/${S3_BUCKET:-denoise-xray};
+      echo 'bucket ${S3_BUCKET:-denoise-xray} ready';
+      "
+
+  gateway:
+    image: ${IMAGE_REGISTRY:-ghcr.io/Reckz69}/gateway:${IMAGE_TAG:-latest}
+    build:
+      context: ../../backend
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-minio}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-denoise-xray}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io/Reckz69}/worker:${IMAGE_TAG:-latest}
+    build:
+      context: ../../backend
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-denoise-xray}
+      MODEL_PATH: ${MODEL_PATH:-/weights/n2n_unet_best_weights04.keras}
+    volumes:
+      - ${MODEL_WEIGHTS_PATH}:/weights/n2n_unet_best_weights04.keras:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g
+
+  scheduler:
+    image: ${IMAGE_REGISTRY:-ghcr.io/Reckz69}/scheduler:${IMAGE_TAG:-latest}
+    build:
+      context: ../../backend
+      dockerfile: scheduler/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-minio}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-denoise-xray}
+      SCHEDULER_POLL_INTERVAL_SECONDS: ${SCHEDULER_POLL_INTERVAL_SECONDS:-30}
+      SCHEDULER_CLEANUP_INTERVAL_SECONDS: ${SCHEDULER_CLEANUP_INTERVAL_SECONDS:-3600}
+      SCHEDULER_CLEANUP_LOCK_TTL_SECONDS: ${SCHEDULER_CLEANUP_LOCK_TTL_SECONDS:-3600}
+      JOB_STALL_TIMEOUT_SECONDS: ${JOB_STALL_TIMEOUT_SECONDS:-600}
+      JOB_RETRY_BACKOFF_BASE_SECONDS: ${JOB_RETRY_BACKOFF_BASE_SECONDS:-30}
+      JOB_RETRY_BACKOFF_MAX_SECONDS: ${JOB_RETRY_BACKOFF_MAX_SECONDS:-3600}
+      SCAN_PURGE_DAYS: ${SCAN_PURGE_DAYS:-30}
+      CLEANUP_BATCH_SIZE: ${CLEANUP_BATCH_SIZE:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "/app/scheduler/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

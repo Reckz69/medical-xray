@@ -1,0 +1,27 @@
+# Denoise X — Caddy edge config (Sprint 4D, ADR-013).
+#
+# TLS terminates here with automatic Let's Encrypt certificates (ACME). All
+# internal services stay plain HTTP on the compose network and are never
+# exposed to the host. `${VAR}` placeholders are Caddy environment variables,
+# passed by the `caddy` service in docker-compose.yml.
+#
+#   api.<SITE_DOMAIN>  → gateway:8000   (the API edge)
+#   <SITE_DOMAIN>      → frontend       (only when the frontend is containerized)
+#
+# Default frontend: deployed to Vercel at its own DNS record (e.g.
+# app.<SITE_DOMAIN>), so the <SITE_DOMAIN> block is inert unless
+# FRONTEND_UPSTREAM is set to a reachable upstream.
+
+{
+	email {$ACME_EMAIL}
+}
+
+api.{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy gateway:8000
+}
+
+{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy {$FRONTEND_UPSTREAM}
+}
