@@ -44,7 +44,8 @@
                           │ metrics                    │
                           └────────────────────────────┘
 
-   Observability (all nodes): OTel SDK ─▶ otel-collector ─▶ Prometheus/Grafana
+   Observability (optional overlay): OTel traces ─▶ otel-collector ─▶ Tempo/Jaeger
+   Prometheus metrics (gateway :8000/metrics, worker/scheduler :9101) ─▶ Grafana
    Delivery: GitHub Actions ─▶ lint · type · test · security ─▶ build ─▶ deploy
 ```
 
@@ -142,15 +143,35 @@ served exclusively via short-lived presigned URLs.
 
 ## Observability
 
-- W3C TraceContext propagates across RabbitMQ message headers and DB writes.
+Observability is a **removable overlay** (ADR-010, Sprint 4B). The core stack
+runs identically without it; `deploy/observability.yml` merges onto the base
+compose to add the collector, Prometheus, and Grafana and switch the app
+services onto tracing + metrics.
+
+- **Traces (OTel, tracing-only):** business code reaches OTel only through the
+  `gateway/core/observability/` facade. The gateway runs the request inside a
+  span that continues the incoming W3C `traceparent`; the AMQP header carries
+  the active span's `traceparent` (`queue.py:build_message_headers`), and the
+  worker continues it — one trace per job across every hop. When tracing is on,
+  the OTel trace id *is* the correlation `trace_id`, so envelope, logs, and AMQP
+  headers agree.
+- **Trace backend seam:** app nodes export OTLP/HTTP to `otel-collector:4318`.
+  The collector is the config-only abstraction — it currently exports to
+  `debug` (stdout); forwarding to Tempo/Jaeger is a config edit in
+  `infrastructure/otel-collector/config.yaml`, zero app change.
+- **Metrics (Prometheus):** the gateway serves `/metrics` on the app port
+  (:8000); the worker and scheduler each run a Prometheus HTTP server on
+  `METRICS_PORT` (:9101). Prometheus scrapes all three by compose service DNS
+  name (ADR-010 scrape map); Grafana (host :3001) is provisioned with the
+  datasource.
+- **Logs:** structured JSON with correlation context; log shipping is deferred
+  to Sprint 4C.
 - `trace_id` is persisted on `jobs` and `audit_logs` and returned in every envelope.
 - `X-Request-ID` (edge) is bridged to `trace_id` in the gateway.
-- Traces → OTLP → otel-collector → Jaeger/Grafana Tempo (added later, zero app change).
-- `/metrics` → Prometheus → Grafana dashboards.
 
 ## Deployment topology (Docker now → K8s later)
 
-- **Docker Compose (dev):** postgres, redis, rabbitmq, minio, otel-collector, prometheus, grafana + gateway, worker, scheduler images.
+- **Docker Compose (dev):** postgres, redis, rabbitmq, minio (base) + gateway, worker, scheduler images; the observability overlay (`deploy/observability.yml`) adds otel-collector, prometheus, grafana on request.
 - **K8s (later):** gateway Deployment (horizontal), worker as a separate Deployment/StatefulSet scaled independently (GPU node pool), scheduler as CronJobs, probes via `/health/live` + `/health/ready`.
 - **Terraform (later):** AWS account wiring — RDS, ElastiCache, MQ, S3 + KMS, EKS.
 

@@ -6,6 +6,53 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4B — Observability (branch `sprint/3-real-ml`)
+
+**Added**
+- `gateway/core/observability/` — the vendor-facade seam: `logging.py`
+  (structured JSON + correlation context), `metrics.py` (Prometheus facade +
+  no-op when disabled), `tracing.py` (OpenTelemetry tracing-only facade with
+  W3C `traceparent` propagation; disabled mode is a no-op).
+- `TraceIDMiddleware` (`gateway/core/otel.py`) — request runs inside a span
+  that continues the incoming `traceparent`; the OTel trace id becomes the
+  correlation `trace_id` when tracing is on.
+- W3C propagation: `queue.py:build_message_headers` injects the active span's
+  `traceparent`; the worker continues remote traces
+  (`worker/inference.run`, `worker.process_job`, five `pipeline.*` stage
+  spans, `scans.upload.persist`).
+- ADR-010-observability.
+- Deploy overlay (`deploy/observability.yml`): otel-collector (traces),
+  prometheus (scrape), grafana (datasource provisioned) + env overrides that
+  switch gateway/worker/scheduler onto OTLP tracing + Prometheus metrics.
+  Core stack runs without it.
+- `deploy/docker-compose.test.yml` — app services gated behind the `app`
+  compose profile (infra-only bring-up for the pytest suite).
+- `infrastructure/` configs: otel-collector, prometheus scrape, grafana
+  datasource — validated against the real binaries (`promtool`,
+  `otelcol validate`).
+- `scripts/benchmark_observability.py` + `docs/benchmarks/observability-overhead.md`
+  — perf gate: **+0.55%** end-to-end overhead (tracing off vs on, PASS < 5%).
+- Per-phase reviews: `docs/reviews/sprint-4b-phase{1,2,3,4}-review.md`.
+- OTel deps (`opentelemetry-api/sdk/exporter-otlp-proto-http`, tracing-only,
+  justified in `requirements.txt`).
+
+**Fixed**
+- `OTLPSpanExporter` silent span-drop: an explicitly-passed endpoint is used
+  verbatim by the SDK (only the env-var default path gets `/v1/traces`
+  appended), so a bare `http://collector:4318` POSTed to `/` → 404 → every
+  span dropped. The facade now appends the signal path itself
+  (`_otlp_http_endpoint`), caught by the Phase 4 deploy smoke test against a
+  real collector, pinned by `test_otlp_http_endpoint_appends_signal_path`.
+- `@contextmanager` no-op bodies use a plain `yield` (a `yield from
+  contextlib.nullcontext()` raises `TypeError`).
+
+**Changed**
+- `gateway/main.py`, `worker/main.py`, `scheduler/main.py` — `tracer.shutdown()`
+  in teardown; `init_observability` wires `service`/`otel_exporter`/`otel_endpoint`.
+- Observability is a removable overlay: `docker compose -f
+  deploy/docker-compose.yml -f deploy/observability.yml up -d --build` for the
+  full stack + observability.
+
 ### Sprint 4A — Distributed scheduler (branch `sprint/3-real-ml`)
 
 **Added**

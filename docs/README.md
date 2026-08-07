@@ -31,6 +31,7 @@ evolves.
 | [ADR-007](adr/ADR-007-common-image.md) | Unified CommonImage for PNG/JPEG/DICOM | Accepted |
 | [ADR-008](adr/ADR-008-orchestrator.md) | Orchestrator owns the pipeline flow | Accepted |
 | [ADR-009](adr/ADR-009-scheduler.md) | Distributed scheduler for retry/stall/cleanup | Accepted |
+| [ADR-010](adr/ADR-010-observability.md) | Tracing-only OTel, Prometheus metrics, removable overlay | Accepted |
 
 ## Conventions that apply to all artifacts
 
