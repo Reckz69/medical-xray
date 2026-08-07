@@ -1,9 +1,9 @@
 # Fast feedback gate — runs on every push to a sprint branch.
-# Fast gates only (no weights, no golden, no Docker build, no E2E):
-#   backend:  ruff -> mypy -> pytest (unit + integration)
-#   frontend: tsc -> eslint
-# The full validation gate (weights, golden, Docker build, Playwright) is
-# `ci-full.yml`, required on PRs to main / pushes to main / manual dispatch.
+# Faster gates only (no golden, no Docker build, no E2E): the backend job
+# still downloads/verifies the weights because the unit + integration suite
+# drives the real worker/model; it just skips the heavy golden, build, and
+# E2E stages. The full validation gate is `ci-full.yml`, required on PRs to
+# main / pushes to main / manual dispatch.
 #
 # Docs: docs/engineering/ci.md
 name: CI (fast)
@@ -52,6 +52,18 @@ jobs:
       - name: Mypy (scoped gate)
         working-directory: backend
         run: python -m mypy --config-file mypy.ini
+
+      # The unit + integration suite drives the real worker, which loads the
+      # model from the repo root (backend/../n2n_unet_best_weights04 (2).keras),
+      # so the weights must be present even on the fast gate. A missing or
+      # corrupt asset fails this step loudly (ADR-011).
+      - name: Download model weights (weights-v1)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download weights-v1 --pattern 'n2n_unet_best_weights04 (2).keras' --dir .
+
+      - name: Verify weights integrity (ADR-011)
+        run: bash scripts/verify_weights.sh
 
       - name: Start infra (test override)
         working-directory: backend

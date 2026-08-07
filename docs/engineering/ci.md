@@ -41,6 +41,12 @@ build, or E2E spend.
 Both workflows use `concurrency: cancel-in-progress`, so a newer push cancels
 the superseded run for the same ref.
 
+The unit + integration pytest suite drives the real worker, which loads the
+model from the repo root — so **both** workflows download and verify the
+weights from the `weights-v1` release (via `GITHUB_TOKEN` + the ADR-011
+manifest) before pytest. What the fast gate skips is the expensive goldens,
+Docker build, and Playwright E2E.
+
 ## Required GitHub secrets
 
 **None.** The only credential used is the built-in `GITHUB_TOKEN` (see
