@@ -33,6 +33,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { OutputCard } from "@/components/OutputCard";
+import { JobTimeline } from "@/components/JobTimeline";
 
 /* ============================================
    TYPES
@@ -415,6 +416,12 @@ export default function DenoisePage() {
             )}
 
             {isProcessing && <ProcessingCard job={job} phase={phase} />}
+
+            {(isProcessing || (isError && job)) && (
+              <div className="mt-4">
+                <JobTimeline job={job} scan={scan} />
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-6">

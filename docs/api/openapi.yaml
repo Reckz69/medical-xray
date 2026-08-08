@@ -528,7 +528,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
-  /api/v1/scans/{scan_id}/output/{output_type}/url:
+  /api/v1/scans/{scan_id}/outputs/{output_type}/url:
     get:
       tags: [Scans]
       operationId: getOutputUrl

@@ -11,9 +11,10 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import aio_pika
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,13 +23,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from gateway.core import errors
+from gateway.core.buildinfo import APP_GIT_SHA
 from gateway.core.config import settings
 from gateway.core.db import engine
+from gateway.core.deps import DBSession, get_current_user
 from gateway.core.observability import init_observability, metrics, tracer
 from gateway.core.otel import TraceIDMiddleware, get_trace_id
-from gateway.core.queue import queue
+from gateway.core.queue import WORKER_QUEUE, queue
 from gateway.core.redis import redis
 from gateway.core.storage import storage
+from gateway.core.worker_registry import read_worker_states
 from gateway.domains.auth import auth_router
 from gateway.domains.jobs import job_router
 from gateway.domains.scans import scan_router
@@ -156,18 +160,8 @@ async def health_live() -> dict:
     return {"status": "ok"}
 
 
-# ── Metrics ─────────────────────────────────────────────────────────────────
-if settings.metrics_enabled:
-    @app.get("/metrics", tags=["metrics"], include_in_schema=False)
-    async def metrics_endpoint() -> Response:
-        return Response(
-            content=metrics.render(),
-            media_type=metrics.CONTENT_TYPE_LATEST,
-        )
-
-
-@app.get("/health/ready", tags=["health"], include_in_schema=False)
-async def health_ready() -> JSONResponse:
+async def _run_ready_checks() -> dict[str, str]:
+    """Probe core dependencies shared by /health/ready and /health/infra."""
     checks: dict[str, str] = {}
 
     try:
@@ -198,6 +192,99 @@ async def health_ready() -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         checks["storage"] = f"error: {exc}"
 
+    return checks
+
+
+async def _queue_depth() -> int | None:
+    """Best-effort RabbitMQ queue depth (optional diagnostics, never fatal)."""
+    try:
+        connection = await asyncio.wait_for(
+            aio_pika.connect(settings.rabbitmq_url), timeout=2
+        )
+        try:
+            channel = await connection.channel()
+            declared = await channel.queue_declare(WORKER_QUEUE, passive=True)
+            return int(declared.message_count)
+        finally:
+            await connection.close()
+    except Exception:  # noqa: BLE001 — diagnostics must never fail the endpoint
+        return None
+
+
+async def _require_infra_auth(request: Request, session: DBSession) -> None:
+    """Auth gate for /health/infra — enforced only when configured (prod)."""
+    if not settings.health_infra_auth:
+        return
+    await get_current_user(request, session)
+
+
+def _worker_block(states: list[dict]) -> dict:
+    """Aggregate heartbeat payloads into the /health/infra worker block."""
+    if not states:
+        return {
+            "alive": False,
+            "last_heartbeat": None,
+            "model_loaded": False,
+            "model_name": None,
+            "model_version": None,
+            "gpu": None,
+        }
+    freshest = max(states, key=lambda s: s.get("heartbeat_at", ""))
+    return {
+        "alive": True,
+        "last_heartbeat": freshest.get("heartbeat_at"),
+        "model_loaded": True,
+        "model_name": freshest.get("model_name"),
+        "model_version": freshest.get("model_version"),
+        "gpu": freshest.get("gpu"),
+    }
+
+
+@app.get("/health/infra", tags=["health"], include_in_schema=False)
+async def health_infra(
+    _: None = Depends(_require_infra_auth),
+) -> JSONResponse:
+    """Operational health: gateway, core deps, worker, model, queue depth.
+
+    Intentionally hidden from the public OpenAPI schema (documented in
+    docs/engineering). Gated behind auth in production (health_infra_auth);
+    open in development. Optional diagnostics (queue_depth, git_sha) degrade
+    to null rather than failing the endpoint.
+    """
+    checks = await _run_ready_checks()
+    states = await read_worker_states()
+    worker = _worker_block(states)
+    queue_depth = await _queue_depth()
+
+    degraded = any(value != "ok" for value in checks.values()) or not worker["alive"]
+    return JSONResponse(
+        status_code=200 if not degraded else 503,
+        content={
+            "status": "ok" if not degraded else "degraded",
+            "checked_at": datetime.now(UTC).isoformat(),
+            "app_version": settings.app_version,
+            "git_sha": APP_GIT_SHA,
+            "model_version": worker.get("model_version") or settings.model_version,
+            "checks": checks,
+            "worker": worker,
+            "rabbitmq": {"queue_name": WORKER_QUEUE, "queue_depth": queue_depth},
+        },
+    )
+
+
+# ── Metrics ─────────────────────────────────────────────────────────────────
+if settings.metrics_enabled:
+    @app.get("/metrics", tags=["metrics"], include_in_schema=False)
+    async def metrics_endpoint() -> Response:
+        return Response(
+            content=metrics.render(),
+            media_type=metrics.CONTENT_TYPE_LATEST,
+        )
+
+
+@app.get("/health/ready", tags=["health"], include_in_schema=False)
+async def health_ready() -> JSONResponse:
+    checks = await _run_ready_checks()
     ready = all(value == "ok" for value in checks.values())
     return JSONResponse(
         status_code=200 if ready else 503,

@@ -39,6 +39,10 @@ CMD_INFERENCE_RUN = "inference.run"
 CMD_CLEANUP_RUN = "cleanup.run"
 CMD_NOTIFICATION_SEND = "notification.send"
 
+# Durable queue bound to CMD_INFERENCE_RUN (also inspected for queue depth by
+# /health/infra).
+WORKER_QUEUE = "inference.worker"
+
 # Events (worker / domains -> subscribers)
 EVT_SCAN_COMPLETED = "scan.completed"
 EVT_SCAN_FAILED = "scan.failed"

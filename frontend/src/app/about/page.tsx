@@ -70,6 +70,7 @@ const features = [
 const technicalSpecs = [
   { label: "AI Architecture", value: "U-Net (Encoder-Decoder)" },
   { label: "Training Framework", value: "Noise-to-Noise (N2N)" },
+  { label: "Model Version", value: "v1.0.0" },
   { label: "Patch Size", value: "256 × 256 px" },
   { label: "Model Format", value: ".keras (TensorFlow)" },
   { label: "Noise Threshold", value: "Variance > 8.0" },
@@ -335,6 +336,49 @@ export default function AboutPage() {
                 </p>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── License ── */}
+      <section className="py-20 px-6 md:px-12 bg-[oklch(0.97_0.01_285)]">
+        <div className="max-w-3xl mx-auto">
+          <div className="text-center mb-8">
+            <div className="pill-badge mb-4 mx-auto w-fit">
+              <BookOpen className="w-3 h-3" />
+              License
+            </div>
+            <h2 className="text-3xl font-extrabold text-[oklch(0.14_0.02_275)]">Open Source</h2>
+          </div>
+          <div className="glass-card rounded-2xl p-8 border border-[oklch(0.91_0.015_285)] shadow-sm">
+            <p className="text-sm text-[oklch(0.45_0.05_280)] leading-relaxed">
+              Denoise X (model weights, gateway, worker, and web frontend) is
+              released under the{" "}
+              <span className="font-semibold text-[oklch(0.14_0.02_275)]">MIT License</span> —
+              you are free to use, modify, and distribute it, provided the
+              copyright and permission notice are preserved.
+            </p>
+            <pre className="mt-5 rounded-xl bg-[#0a0a0f] text-emerald-200 text-xs p-5 overflow-x-auto font-mono leading-relaxed">
+{`Copyright (c) 2026 Denoise X contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.`}
+            </pre>
           </div>
         </div>
       </section>

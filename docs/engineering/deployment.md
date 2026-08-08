@@ -206,6 +206,49 @@ docker compose -f docker-compose.yml -f observability.yml up -d
 | minio | 9000 / 9001 | none |
 | otel-collector / prometheus / grafana / jaeger | 4318 / 9090 / 3000 / 16686 | none (reach via SSH tunnel; Jaeger UI is loopback-bound) |
 
+## Health endpoints & worker heartbeat (Sprint 4F)
+
+Three health endpoints, split by audience:
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `/health/live` | public | Liveness — process is up (load-balancer / K8s probe). |
+| `/health/ready` | public | Readiness — Postgres + Redis reachable (routed for user traffic). |
+| `/health/infra` | bearer (`health_infra_auth`, ON in production) | Full matrix for the operator dashboard — dependency checks, worker liveness, model + queue state. |
+
+`/health/infra` returns `200 ok` when every dependency is green and the worker
+last reported alive within its TTL; `503 degraded` otherwise (still with a full
+body so the status page renders partial state). App version + `git_sha` are
+captured once at import time (`gateway/core/buildinfo.py`), so a mis-deployed
+image is visible on the status page instead of silently reporting stale code.
+
+### Worker heartbeat registry
+
+The worker does not run in-process with the gateway, so the gateway tracks it
+via a Redis heartbeat (`gateway/core/worker_registry.py`, schema v1):
+
+- Every `HEARTBEAT_INTERVAL` seconds the worker writes `worker:active:<id>` with
+  a TTL of `HEARTBEAT_TTL` seconds and adds its id to the `worker:active` set.
+- The registry reports the freshest heartbeat per worker; stale entries (past
+  TTL) are pruned. A worker is **alive** iff a heartbeat is fresh at query time.
+- Heartbeat/registry reads are telemetry-only and **never raise** — an
+  unreachable Redis does not take down `/health/infra`, it just degrades the
+  worker/queue row to `null`.
+- The registry also carries the loaded model name/version and GPU state so the
+  dashboard can show which model is actually serving.
+
+The queue row reads `inference.worker` depth best-effort: depth is a hint for
+the dashboard and degrades to `null` (never a 5xx) if RabbitMQ is busy or down.
+
+### Verifying after deploy
+
+```sh
+curl -sf https://api.<SITE_DOMAIN>/health/live
+curl -sf https://api.<SITE_DOMAIN>/health/ready
+curl -sf https://api.<SITE_DOMAIN>/health/infra \
+  -H "Authorization: Bearer <ops-token>"      # 200 ok when worker is alive
+```
+
 ## Upgrade / rollback
 
 Upgrades pin the compatibility matrix (ADR-017): schema revision + images +

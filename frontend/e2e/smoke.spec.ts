@@ -48,9 +48,78 @@ test.describe.serial("DenoiseX smoke", () => {
     await expand.click();
     await expect(page.locator("#output-enhanced")).toBeVisible({ timeout: 20_000 });
 
-    // Logout returns to the signed-out shell
+    // Logout returns to the signed-out shell (sign out lives in the user menu)
+    await page.click("#nav-user-menu");
     await page.click("#nav-signout");
     await expect(page.locator("#nav-signin")).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("dashboard + status matrix + feedback/about links", async ({ page }) => {
+    await signIn(page);
+
+    // Dashboard: infra + worker + model + queue cards and dependency matrix
+    await page.click("#nav-dashboard");
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.locator("#dashboard-refresh")).toBeVisible();
+    await expect(page.getByText("Worker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Model", { exact: true })).toBeVisible();
+    await expect(page.getByText("Queue Depth", { exact: true })).toBeVisible();
+    await expect(page.getByText("PostgreSQL")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Object Storage (MinIO)")).toBeVisible();
+
+    // Status: full infra matrix (worker/model/queue/build only render when the
+    // authorized /health/infra payload arrives, not the public ready probe)
+    await page.click("#nav-status");
+    await expect(page).toHaveURL(/\/status/);
+    await expect(page.locator("#status-refresh")).toBeVisible();
+    await expect(page.getByText("All systems operational")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Worker & Model")).toBeVisible();
+    await expect(page.getByText("Worker Alive")).toBeVisible();
+    await expect(page.getByText("Last Heartbeat")).toBeVisible();
+    await expect(page.getByText("Inference Queue")).toBeVisible();
+    await expect(page.getByText("inference.worker")).toBeVisible();
+    await expect(page.getByText("Build", { exact: true })).toBeVisible();
+    await expect(page.getByText("Git SHA")).toBeVisible();
+    await page.click("#status-refresh");
+    await expect(page.locator("#status-refresh")).toBeEnabled();
+
+    // Feedback: GitHub issue + mailto destinations
+    await page.click("#nav-feedback");
+    await expect(page).toHaveURL(/\/feedback/);
+    await expect(page.locator("#feedback-github")).toBeVisible();
+    await expect(
+      page.locator('a[href*="github.com/Reckz69/medical-xray/issues/new"]')
+    ).toBeVisible();
+    await expect(page.locator("#feedback-mail")).toBeVisible();
+    await expect(page.locator('a[href^="mailto:"]')).toBeVisible();
+
+    // About: model version + license
+    await page.click("#nav-about");
+    await expect(page).toHaveURL(/\/about/);
+    await expect(page.getByText("Model Version")).toBeVisible();
+    await expect(page.getByText("MIT License")).toBeVisible();
+  });
+
+  test("soft-delete a scan from the gallery", async ({ page }) => {
+    await signIn(page);
+    await page.click("#nav-gallery");
+    await expect(page).toHaveURL(/\/gallery/);
+
+    // Delete the first scan: confirm button appears, then the scan disappears
+    const del = page.locator('button[id^="delete-"]').first();
+    await expect(del).toBeVisible({ timeout: 30_000 });
+    const scanId = (await del.getAttribute("id"))!.replace("delete-", "");
+    await del.click();
+    const confirm = page.locator(`#delete-confirm-${scanId}`);
+    await expect(confirm).toBeVisible();
+    await confirm.click();
+    await expect(confirm).toBeHidden({ timeout: 20_000 });
+    await expect(page.locator(`#expand-${scanId}`)).toBeHidden({ timeout: 20_000 });
+  });
+
+  test("status page is auth-gated when signed out", async ({ page }) => {
+    await page.goto("/status");
+    await expect(page.locator("#go-signin")).toBeVisible();
   });
 });
 
@@ -88,4 +157,13 @@ async function uploadAndWaitForResults(page: Page) {
   // Polling finishes only when the worker reaches COMPLETED. Generous timeout
   // to cover a cold model load on CPU.
   await expect(page.locator("#output-enhanced")).toBeVisible({ timeout: 300_000 });
+}
+
+/** Sign in to the shared E2E account. Fails fast if the account does not exist. */
+async function signIn(page: Page) {
+  await page.goto("/signin");
+  await page.fill("#email", EMAIL);
+  await page.fill("#password", PASSWORD);
+  await page.click("#signin-submit");
+  await expect(page).toHaveURL(/\/denoise/, { timeout: 15_000 });
 }

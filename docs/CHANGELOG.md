@@ -6,6 +6,57 @@ file.
 
 ## [Unreleased]
 
+### Sprint 4F — Operational health + full frontend coverage
+
+**Added**
+- `GET /health/infra` (read-only, hidden from public OpenAPI): aggregated
+  operational matrix — `status`/`checked_at`, `app_version`, `git_sha`
+  (captured once at import via `gateway/core/buildinfo.py`), `model_version`,
+  `checks` (postgres/redis/rabbitmq/storage), `worker` (alive, last heartbeat,
+  model loaded/name/version, gpu), and `rabbitmq` (queue name + best-effort
+  depth). Returns 200 ok / 503 degraded; optional diagnostics (`queue_depth`,
+  `git_sha`) degrade to null instead of failing.
+- Worker heartbeat registry (`gateway/core/worker_registry.py`): versioned
+  payload (`schema_version: 1`, uptime, model, gpu, `capabilities`),
+  Redis `worker:active` set + per-worker heartbeat key, gateway-side pruning of
+  stale members. Redis is telemetry-only — failures never raise or crash the
+  worker. Scheduler-independent eventual consistency: a crashed worker's key
+  expires via TTL and is pruned on next read.
+- Config knobs (`gateway/core/config.py`): `app_version`, `git_sha`,
+  `health_infra_auth` (default ON in production only), worker heartbeat
+  interval/TTL.
+- Worker heartbeat loop wired in `worker/main.py` + rewritten `worker/heartbeat.py`.
+- `backend/tests/test_health_infra.py` (6 tests): payload schema, registry
+  stale-pruning, endpoint contract, degraded-when-worker-dead, queue-depth-null
+  degradation, and the configurable auth gate. Full backend suite green
+  (142 passed / 3 deselected).
+- Frontend: auth-aware shell (mobile menu, user dropdown, Toaster/sonner,
+  `next-themes` wiring), `/dashboard` (live summary cards, infra matrix, recent
+  scans, statistics via `useLiveScans`/`useInfraHealth`), `/status` (full infra
+  matrix with `checked_at` age + 401→`/health/ready` fallback), `/gallery`
+  (metadata-rich cards, before/after `ScanViewer`, soft-delete with confirm,
+  pagination, live polling), denoise job timeline (real transitions), `/profile`,
+  `/settings` (localStorage prefs: poll interval, grid density, theme), functional
+  `/feedback` (GitHub Issues + mailto), `/about` (Model Version + MIT License),
+  auth-aware landing (`/` redirects signed-in users to `/dashboard`).
+- Frontend API surface (`src/lib/api.ts`): `checkReady`, `checkInfra` (returns
+  the degraded 503 body rather than throwing; throws only on 401/403 — so the
+  401→`/health/ready` fallback actually triggers — or an unparseable payload),
+  `deleteScan`, `forgotPassword`.
+- `frontend/e2e/smoke.spec.ts` extended: dashboard + status matrix +
+  feedback/about links, gallery soft-delete flow, and the signed-out status
+  auth gate (4 tests, green against the live stack).
+
+**Changed**
+- `frontend/src/app/page.tsx`: signed-in visitors redirect to `/dashboard`.
+- `docs/engineering/deployment.md`: `/health/infra` contract, heartbeat registry
+  and eventual-consistency documented.
+- `docs/api/openapi.yaml`: `/scans/{id}/outputs/{type}/url` plural path corrected.
+
+**Known gaps (recorded, not fixed)**
+- `/api/v1/auth/forgot-password` remains an acknowledge-only placeholder (no
+  email delivery yet) — the frontend wires the call, not the reset flow.
+
 ### Sprint 4E — Production readiness (runtime configuration)
 
 **Added**

@@ -3,9 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Loader2 } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 import {
   Zap,
   ShieldCheck,
@@ -469,6 +473,24 @@ function Footer() {
    PAGE
    ============================================ */
 export default function HomePage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && user) router.replace("/dashboard");
+  }, [loading, user, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[calc(100vh-4rem)] bg-[oklch(0.98_0.005_285)] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[oklch(0.52_0.22_155)] animate-spin" />
+      </div>
+    );
+  }
+
+  // Signed-in users are redirected to their dashboard.
+  if (user) return null;
+
   return (
     <>
       <HeroSection />

@@ -12,6 +12,7 @@ worker thread before consumption begins, so every job shares the loaded model
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -23,6 +24,7 @@ from gateway.core.observability import init_observability, log_context, metrics,
 from gateway.core.queue import CMD_INFERENCE_RUN, COMMANDS_EXCHANGE
 from worker import executor
 from worker.consumer import handle_inference_run
+from worker.heartbeat import heartbeat_loop
 
 logger = logging.getLogger("denoise.worker")
 
@@ -72,6 +74,8 @@ async def main() -> None:
         executor.model_manager.gpu_name or "cpu",
     )
 
+    heartbeat_task = asyncio.create_task(heartbeat_loop(executor.model_manager))
+
     connection = await aio_pika.connect_robust(settings.rabbitmq_url)
     channel = await connection.channel()
     await channel.set_qos(prefetch_count=1)
@@ -85,6 +89,9 @@ async def main() -> None:
     try:
         await asyncio.Event().wait()
     finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
         await connection.close()
         executor.model_manager.shutdown()
         tracer.shutdown()

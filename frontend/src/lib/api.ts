@@ -88,6 +88,38 @@ export interface OutputUrl {
   expires_in: number;
 }
 
+/* Non-enveloped /health/* responses (raw JSON, never wrapped). */
+
+export interface ReadyResponse {
+  status: "ok" | "degraded";
+  checks: Record<string, string>;
+}
+
+export type HealthChecks = Record<string, string>;
+
+export interface WorkerHealth {
+  alive: boolean;
+  last_heartbeat: string | null;
+  model_loaded: boolean;
+  model_name: string | null;
+  model_version: string | null;
+  gpu: string | null;
+}
+
+export interface InfraHealth {
+  status: "ok" | "degraded";
+  checked_at: string;
+  app_version: string;
+  git_sha: string;
+  model_version: string;
+  checks: HealthChecks;
+  worker: WorkerHealth;
+  rabbitmq: {
+    queue_name: string;
+    queue_depth: number | null;
+  };
+}
+
 export const JOB_STATUS = {
   QUEUED: "QUEUED",
   RUNNING: "RUNNING",
@@ -237,6 +269,49 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
+/** Readiness probe — returns the raw (non-enveloped) body or null on network error. */
+export async function checkReady(): Promise<ReadyResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health/ready`, { method: "GET" });
+    return (await response.json().catch(() => null)) as ReadyResponse | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Operational health matrix (gateway, infra deps, worker heartbeat, queue depth).
+ * Non-enveloped and auth-gated in production. Attach a bearer token when present
+ * so the caller can fall back to /health/ready on a 401.
+ *
+ * Returns the full body even when degraded (HTTP 503 carries a parseable JSON
+ * payload with worker/queue data); throws only when no payload is available.
+ */
+export async function checkInfra(token?: string | null): Promise<InfraHealth> {
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`${API_BASE_URL}/health/infra`, {
+    method: "GET",
+    headers,
+  });
+  const body = (await response.json().catch(() => null)) as InfraHealth | null;
+  if (response.status === 401 || response.status === 403) {
+    throw new ApiError(
+      "Health matrix requires authorization",
+      "unauthorized",
+      response.status
+    );
+  }
+  if (body === null) {
+    throw new ApiError(
+      `Health check failed (${response.status})`,
+      "health_check_failed",
+      response.status
+    );
+  }
+  return body;
+}
+
 /* ============================================
    AUTH
    ============================================ */
@@ -305,6 +380,19 @@ export async function me(): Promise<User> {
   return request<User>("/api/v1/auth/me", { method: "GET" });
 }
 
+/** Placeholder password-reset flow — backend acknowledges the request. */
+export async function forgotPassword(email: string): Promise<void> {
+  await request<void>(
+    "/api/v1/auth/forgot-password",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    },
+    false
+  );
+}
+
 /* ============================================
    SCANS
    ============================================ */
@@ -332,6 +420,11 @@ export async function getOutputUrl(scanId: string, outputType: string): Promise<
   return request<OutputUrl>(`/api/v1/scans/${scanId}/outputs/${outputType}/url`, {
     method: "GET",
   });
+}
+
+/** Soft-delete a scan (returns 204; the item disappears from list/gallery). */
+export async function deleteScan(scanId: string): Promise<void> {
+  return request<void>(`/api/v1/scans/${scanId}`, { method: "DELETE" });
 }
 
 /* ============================================

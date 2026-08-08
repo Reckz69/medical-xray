@@ -6,6 +6,7 @@ directly. See `.env.example` at the repository root for the full list.
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
     environment: str = "development"  # development | staging | production
     debug: bool = False
     api_prefix: str = "/api/v1"
+
+    # Release provenance exposed by /health/infra (Sprint 4F). `git_sha` can be
+    # injected by CI/build pipelines; when empty it is auto-detected once at
+    # import time from the repository (never per request).
+    app_version: str = "0.1.0"
+    git_sha: str = ""
 
     # ── Database ─────────────────────────────────────────────────────────────
     database_url: str = (
@@ -79,6 +86,18 @@ class Settings(BaseSettings):
     scan_purge_days: int = 30  # soft-deleted scans hard-deleted after this
     cleanup_batch_size: int = 100
 
+    # ── Worker heartbeat / infra health (Sprint 4F) ──────────────────────────
+    # The worker re-affirms a heartbeat key every interval with this TTL; the
+    # gateway aggregates it into /health/infra. Crashes are handled by expiry:
+    # a stopped worker's key lapses and the gateway prunes it from the registry.
+    worker_heartbeat_interval_seconds: int = 10
+    worker_heartbeat_ttl_seconds: int = 30
+
+    # Gate /health/infra (operational details: worker status, model version,
+    # queue depth) behind authentication. Defaults to ON in production, open in
+    # development/staging unless explicitly overridden. None -> auto by env.
+    health_infra_auth: bool | None = None
+
     # ── Rate limits (per-window) ─────────────────────────────────────────────
     rate_limit_login_per_minute: int = 5
     rate_limit_register_per_day: int = 3
@@ -128,6 +147,13 @@ class Settings(BaseSettings):
         "http://localhost:3001",
         "http://127.0.0.1:3000",
     ]
+
+    @model_validator(mode="after")
+    def _default_health_infra_auth(self) -> "Settings":
+        """Default /health/infra auth to ON in production only."""
+        if self.health_infra_auth is None:
+            self.health_infra_auth = self.environment == "production"
+        return self
 
 
 @lru_cache
