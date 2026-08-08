@@ -52,6 +52,14 @@ file.
 - `docs/engineering/deployment.md`: `/health/infra` contract, heartbeat registry
   and eventual-consistency documented.
 - `docs/api/openapi.yaml`: `/scans/{id}/outputs/{type}/url` plural path corrected.
+- `backend/deploy/docker-compose.yml` + `deploy/production/docker-compose.yml`:
+  worker service now sets `REDIS_URL` — without it the containerized worker
+  defaulted to `localhost:6379` and its heartbeat never landed (telemetry
+  swallows the write), so `/health/infra` always reported `worker.alive: false`.
+- `.github/workflows/ci-images.yml`: replaced the invalid `lower(...)` GitHub
+  Actions expression (the workflow was rejected with "Unrecognized function")
+  with bash `${GITHUB_REPOSITORY_OWNER,,}` in the tags step — image publishing
+  to GHCR works again.
 
 **Known gaps (recorded, not fixed)**
 - `/api/v1/auth/forgot-password` remains an acknowledge-only placeholder (no
