@@ -119,6 +119,7 @@ services:
       dockerfile: worker/Dockerfile
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-denoise}:${POSTGRES_PASSWORD:-denoise}@postgres:5432/${POSTGRES_DB:-denoise}
+      REDIS_URL: redis://redis:6379/0
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-denoise}:${RABBITMQ_PASS:-denoise}@rabbitmq:5672/
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
