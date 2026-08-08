@@ -16,8 +16,9 @@
 #
 # The owner is `github.repository_owner`: for a user account GHCR only allows
 # `ghcr.io/USER/<image>` (no OWNER/REPO nesting) — see ADR-016. Docker image
-# references must be lowercase, so the owner is lowercased explicitly (GHCR
-# itself is case-insensitive).
+# references must be lowercase, so the owner is lowercased explicitly with bash
+# parameter expansion `${GITHUB_REPOSITORY_OWNER,,}` in the tags step (GHCR
+# itself is case-insensitive). GitHub Actions expressions have no `lower()`.
 #
 # Docs: docs/engineering/ci.md
 name: CI (images)
@@ -47,8 +48,6 @@ jobs:
       fail-fast: false
       matrix:
         service: [gateway, worker, scheduler]
-    env:
-      IMAGE: ghcr.io/${{ lower(github.repository_owner) }}/${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,17 +66,18 @@ jobs:
       - name: Compute image tags
         id: tags
         run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.service }}"
           SHA="${{ github.sha }}"
-          TAGS="${{ env.IMAGE }}:${SHA}"
+          TAGS="${IMAGE}:${SHA}"
           case "${{ github.ref }}" in
             refs/heads/main)
-              TAGS="${TAGS},${{ env.IMAGE }}:latest"
+              TAGS="${TAGS},${IMAGE}:latest"
               ;;
             refs/tags/sprint-*)
-              TAGS="${TAGS},${{ env.IMAGE }}:${{ github.ref_name }}"
+              TAGS="${TAGS},${IMAGE}:${{ github.ref_name }}"
               ;;
             refs/tags/v*)
-              TAGS="${TAGS},${{ env.IMAGE }}:${{ github.ref_name }},${{ env.IMAGE }}:latest"
+              TAGS="${TAGS},${IMAGE}:${{ github.ref_name }},${IMAGE}:latest"
               ;;
           esac
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
